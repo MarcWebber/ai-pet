@@ -84,7 +84,6 @@ final class BubblePanelController: NSObject {
             size: NSSize(width: 410, height: 254),
             inputPlaceholder: "例如：这个页面现在需要我做什么？",
             purpose: .screenQuestion,
-            takeoverEnabled: false,
             activates: true,
             near: petFrame,
             on: screen
@@ -108,7 +107,6 @@ final class BubblePanelController: NSObject {
             body: answerBody(message, question: question),
             size: NSSize(width: 420, height: 286),
             inputPlaceholder: "继续问一句…",
-            takeoverEnabled: false,
             activates: true,
             near: petFrame,
             on: screen
@@ -156,8 +154,8 @@ final class BubblePanelController: NSObject {
         input.stringValue = String(initialTask.prefix(4_000))
         show(
             title: "告诉果冻要做什么",
-            badge: "接管任务",
-            body: "输入明确任务；留空并按快捷键也可以让果冻识别当前屏幕。",
+            badge: "屏幕接管 · Beta",
+            body: "Beta 功能：输入明确任务后，果冻可能执行鼠标和键盘动作。",
             size: NSSize(width: 390, height: 224),
             inputPlaceholder: "例如：完成这道题并提交",
             purpose: .takeover,

@@ -1,4 +1,0 @@
-interface:
-  display_name: "JellyPet 接管"
-  short_description: "观察、操作并验证浏览器或桌面任务"
-  default_prompt: "使用 $jellypet-takeover:jellypet-takeover 接管当前界面并完成任务。"

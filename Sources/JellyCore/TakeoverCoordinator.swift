@@ -85,7 +85,9 @@ public final class TakeoverCoordinator {
                     prompt: prompt,
                     runtime: request.assistantPreferences.runtime,
                     model: request.assistantPreferences.model,
-                    reasoningEffort: request.assistantPreferences.reasoningEffort
+                    reasoningEffort: request.assistantPreferences.reasoningEffort,
+                    conversationHistoryTurns:
+                        request.assistantPreferences.conversationHistoryTurns
                 ),
                 token: token,
                 screenToolHandler: { [weak self] call in
@@ -547,7 +549,9 @@ public final class TakeoverCoordinator {
                     prompt: prompt,
                     runtime: preferences.runtime,
                     model: preferences.model,
-                    reasoningEffort: preferences.reasoningEffort
+                    reasoningEffort: preferences.reasoningEffort,
+                    conversationHistoryTurns:
+                        preferences.conversationHistoryTurns
                 ),
                 token: token
             )
@@ -575,8 +579,11 @@ public final class TakeoverCoordinator {
 
     private func appendConversation(_ entry: String) {
         conversation.append(String(entry.prefix(8_000)))
-        while conversation.count > 12
-            || conversation.reduce(0, { $0 + $1.utf8.count }) > 24_000 {
+        let turns = answerPreferences?.conversationHistoryTurns ?? 8
+        let entryLimit = max(2, turns * 2)
+        let byteLimit = max(24_000, min(200_000, turns * 16_000))
+        while conversation.count > entryLimit
+            || conversation.reduce(0, { $0 + $1.utf8.count }) > byteLimit {
             conversation.removeFirst()
         }
     }

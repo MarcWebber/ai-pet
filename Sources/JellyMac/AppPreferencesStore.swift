@@ -4,11 +4,6 @@ import JellyCore
 public final class AppPreferencesStore {
     private enum Key {
         static let selectedDisplayID = "jelly.selectedDisplayID"
-        static let agentRuntime = "jelly.agentRuntime"
-        static let codexModel = "jelly.codexModel"
-        static let reasoningEffort = "jelly.reasoningEffort"
-        static let customInstructions = "jelly.customInstructions"
-        static let takeoverEnabled = "jelly.takeoverEnabled"
         static let showActivityDetails = "jelly.showActivityDetails"
         static let globalShortcut = "jelly.globalShortcut"
         static let answerScrollShortcut = "jelly.answerScrollShortcut"
@@ -17,17 +12,19 @@ public final class AppPreferencesStore {
     }
 
     private let defaults: UserDefaults
+    private let configurationStore: JellyConfigurationStore
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(
+        defaults: UserDefaults = .standard,
+        configurationURL: URL? = nil,
+        configurationTemplateURL: URL? = nil
+    ) {
         self.defaults = defaults
+        configurationStore = JellyConfigurationStore(
+            configurationURL: configurationURL,
+            templateURL: configurationTemplateURL
+        )
         defaults.register(defaults: [
-            Key.agentRuntime: AssistantPreferences.default.runtime.rawValue,
-            Key.codexModel: AssistantPreferences.default.model,
-            Key.reasoningEffort:
-                AssistantPreferences.default.reasoningEffort.rawValue,
-            Key.customInstructions:
-                AssistantPreferences.default.customInstructions,
-            Key.takeoverEnabled: false,
             Key.showActivityDetails: true,
             Key.globalShortcut: GlobalShortcut.controlOptionSpace.rawValue,
             Key.answerScrollShortcut:
@@ -55,40 +52,78 @@ public final class AppPreferencesStore {
 
     public var assistantPreferences: AssistantPreferences {
         get {
-            let runtime = AgentRuntimeKind(
-                rawValue: defaults.string(forKey: Key.agentRuntime) ?? ""
-            ) ?? AssistantPreferences.default.runtime
-            let model = defaults.string(forKey: Key.codexModel)
-                ?? AssistantPreferences.default.model
-            let effort = ReasoningEffort(
-                rawValue: defaults.string(forKey: Key.reasoningEffort) ?? ""
-            ) ?? AssistantPreferences.default.reasoningEffort
+            let configuration = configurationStore.configuration
             return AssistantPreferences(
-                runtime: runtime,
-                model: model,
-                reasoningEffort: effort,
-                customInstructions: defaults.string(
-                    forKey: Key.customInstructions
-                ) ?? ""
+                runtime: configuration.assistant.runtime,
+                model: configuration.assistant.model,
+                reasoningEffort:
+                    configuration.assistant.reasoningEffort,
+                customInstructions:
+                    configuration.assistant.customInstructions,
+                conversationHistoryTurns:
+                    configuration.conversation.historyTurns
             )
         }
         set {
-            defaults.set(newValue.runtime.rawValue, forKey: Key.agentRuntime)
-            defaults.set(newValue.model, forKey: Key.codexModel)
-            defaults.set(
-                newValue.reasoningEffort.rawValue,
-                forKey: Key.reasoningEffort
-            )
-            defaults.set(
-                newValue.customInstructions,
-                forKey: Key.customInstructions
-            )
+            let previousTurns = conversationHistoryTurns
+            configurationStore.update { configuration in
+                configuration.assistant.runtime = newValue.runtime
+                configuration.assistant.model = newValue.model
+                configuration.assistant.reasoningEffort =
+                    newValue.reasoningEffort
+                configuration.assistant.customInstructions =
+                    newValue.customInstructions
+                configuration.conversation.historyTurns =
+                    newValue.conversationHistoryTurns
+            }
+            if previousTurns != conversationHistoryTurns {
+                answerHistory = answerHistory
+            }
+        }
+    }
+
+    public var conversationHistoryTurns: Int {
+        get { configurationStore.configuration.conversation.historyTurns }
+        set {
+            configurationStore.update {
+                $0.conversation.historyTurns = newValue
+            }
+            answerHistory = answerHistory
         }
     }
 
     public var takeoverEnabled: Bool {
-        get { defaults.bool(forKey: Key.takeoverEnabled) }
-        set { defaults.set(newValue, forKey: Key.takeoverEnabled) }
+        get { configurationStore.configuration.beta.screenTakeover }
+        set {
+            configurationStore.update {
+                $0.beta.screenTakeover = newValue
+            }
+        }
+    }
+
+    public var configurationURL: URL {
+        configurationStore.configurationURL
+    }
+
+    public var configurationError: String? {
+        configurationStore.lastError
+    }
+
+    public var spriteSheetURL: URL? {
+        configurationStore.spriteSheetURL
+    }
+
+    @discardableResult
+    public func reloadConfiguration() -> Bool {
+        configurationStore.reload()
+    }
+
+    public func importSpriteSheet(from source: URL) throws {
+        try configurationStore.importSpriteSheet(from: source)
+    }
+
+    public func resetSpriteSheet() throws {
+        try configurationStore.resetSpriteSheet()
     }
 
     public var globalShortcut: GlobalShortcut {
@@ -137,12 +172,10 @@ public final class AppPreferencesStore {
             else {
                 return []
             }
-            return Array(entries.suffix(AppMetadata.answerHistoryLimit))
+            return Array(entries.suffix(conversationHistoryTurns))
         }
         set {
-            let entries = Array(
-                newValue.suffix(AppMetadata.answerHistoryLimit)
-            )
+            let entries = Array(newValue.suffix(conversationHistoryTurns))
             guard let data = try? JSONEncoder().encode(entries) else {
                 return
             }

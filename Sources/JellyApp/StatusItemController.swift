@@ -40,7 +40,7 @@ final class StatusItemController: NSObject {
         shortcutLabel: String
     ) {
         items[.primary]?.title = isTakingOver ? "取消接管"
-            : isTakeoverEnabled ? "接管当前屏幕" : "分析当前屏幕"
+            : isTakeoverEnabled ? "接管当前屏幕（Beta）" : "分析当前屏幕"
         items[.pet]?.title = isPetVisible ? "最小化果冻" : "显示宠物"
         items[.pet]?.isEnabled = !isTakingOver
         items[.settings]?.isEnabled = !isTakingOver

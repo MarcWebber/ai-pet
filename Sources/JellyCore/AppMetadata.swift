@@ -6,7 +6,6 @@ public enum AppMetadata {
     public static let maximumScreenshotDimension = 2560
     public static let edgeSnapThreshold = 24.0
     public static let takeoverEventLimit = 160
-    public static let answerHistoryLimit = 8
     public static let interfaceSettleSeconds = 0.35
     public static let syntheticEventMarker: Int64 = 0x4A454C4C59
 }

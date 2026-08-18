@@ -7,7 +7,7 @@ class JellySpriteView: NSView {
 
     private static let columns = 8
     private static let rows = 8
-    static let sheet: NSImage = {
+    static let packagedSheet: NSImage = {
         let packaged = Bundle.main.executableURL?
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Resources/PetSprites.png")
@@ -20,13 +20,54 @@ class JellySpriteView: NSView {
         return image
     }()
 
+    private(set) var sheet: NSImage
+    private(set) var usesPackagedSheet = true
     var frameIndex = 0 { didSet { needsDisplay = true } }
+
+    override init(frame frameRect: NSRect) {
+        sheet = Self.packagedSheet
+        super.init(frame: frameRect)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func setSpriteSheet(at url: URL?) throws {
+        guard let url else {
+            sheet = Self.packagedSheet
+            usesPackagedSheet = true
+            needsDisplay = true
+            return
+        }
+        guard url.pathExtension.lowercased() == "png",
+              let data = try? Data(contentsOf: url),
+              let bitmap = NSBitmapImageRep(data: data),
+              bitmap.pixelsWide > 0,
+              bitmap.pixelsWide == bitmap.pixelsHigh,
+              bitmap.pixelsWide % Self.columns == 0,
+              let image = NSImage(data: data) else {
+            throw NSError(
+                domain: AppMetadata.bundleIdentifier,
+                code: 8,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "自定义宠物必须是可读取的正方形 8×8 PNG 精灵图。"
+                ]
+            )
+        }
+        image.size = NSSize(
+            width: bitmap.pixelsWide,
+            height: bitmap.pixelsHigh
+        )
+        sheet = image
+        usesPackagedSheet = false
+        needsDisplay = true
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let source = spriteSourceRect()
         let destination = spriteDestinationRect(for: source)
         guard !source.isEmpty, !destination.isEmpty else { return }
-        Self.sheet.draw(
+        sheet.draw(
             in: destination,
             from: source,
             operation: .sourceOver,
@@ -38,14 +79,14 @@ class JellySpriteView: NSView {
 
     func spriteSourceRect() -> NSRect {
         let cell = NSSize(
-            width: Self.sheet.size.width / CGFloat(Self.columns),
-            height: Self.sheet.size.height / CGFloat(Self.rows)
+            width: sheet.size.width / CGFloat(Self.columns),
+            height: sheet.size.height / CGFloat(Self.rows)
         )
         let column = frameIndex % Self.columns
         let row = frameIndex / Self.columns
         return NSRect(
             x: CGFloat(column) * cell.width,
-            y: Self.sheet.size.height - CGFloat(row + 1) * cell.height,
+            y: sheet.size.height - CGFloat(row + 1) * cell.height,
             width: cell.width,
             height: cell.height
         )
@@ -56,11 +97,11 @@ class JellySpriteView: NSView {
     }
 
     static func verifySpriteAsset() -> String {
-        let valid = sheet.size.width > 0
-            && sheet.size.height > 0
+        let valid = packagedSheet.size.width > 0
+            && packagedSheet.size.height > 0
             && abs(
-                sheet.size.width / CGFloat(columns)
-                    - sheet.size.height / CGFloat(rows)
+                packagedSheet.size.width / CGFloat(columns)
+                    - packagedSheet.size.height / CGFloat(rows)
             ) < 1
         return "Sprite asset verification \(valid ? "passed" : "failed")."
     }
@@ -131,7 +172,9 @@ final class JellyView: JellySpriteView {
 
     override func spriteSourceRect() -> NSRect {
         var source = super.spriteSourceRect()
-        guard renderedActivity == .success else { return source }
+        guard usesPackagedSheet, renderedActivity == .success else {
+            return source
+        }
         let cellHeight = source.height
         let bottomTrim = cellHeight * Self.successSourceBottomTrimRatio
         source.origin.y += bottomTrim

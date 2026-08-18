@@ -4,6 +4,9 @@ import JellyCore
 public final class CodexProcessResponder: AIResponder {
     private let appServer: CodexAppServerClient?
     private let runtime: AgentRuntimeKind
+    private var completedTurns = 0
+    private var configuration: String?
+    private var history: [String] = []
 
     public init(
         executableURL: URL?,
@@ -37,16 +40,59 @@ public final class CodexProcessResponder: AIResponder {
             throw PetFailure.agentRuntimeUnavailable(runtime.displayName)
         }
 
+        let currentConfiguration = [
+            request.model,
+            request.reasoningEffort.rawValue,
+            String(request.conversationHistoryTurns)
+        ].joined(separator: "|")
+        pruneHistory(limit: request.conversationHistoryTurns)
+        let startsNewThread = configuration != currentConfiguration
+            || completedTurns >= request.conversationHistoryTurns
+        if startsNewThread {
+            await appServer.resetSession()
+            completedTurns = 0
+            configuration = currentConfiguration
+        }
+        let effectiveRequest: CodexRequest
+        if startsNewThread, !history.isEmpty {
+            effectiveRequest = CodexRequest(
+                imageURL: request.imageURL,
+                prompt: """
+                此前最近对话（仅作上下文）：
+                \(history.joined(separator: "\n\n"))
+
+                当前请求：
+                \(request.prompt)
+                """,
+                runtime: request.runtime,
+                model: request.model,
+                reasoningEffort: request.reasoningEffort,
+                conversationHistoryTurns: request.conversationHistoryTurns
+            )
+        } else {
+            effectiveRequest = request
+        }
+
         do {
-            return try await withTaskCancellationHandler {
+            let answer = try await withTaskCancellationHandler {
                 try await appServer.respond(
-                    to: request,
+                    to: effectiveRequest,
                     onTextDelta: onTextDelta,
                     screenToolHandler: screenToolHandler
                 )
             } onCancel: {
                 Task { await appServer.cancel() }
             }
+            completedTurns += 1
+            appendHistory(
+                "用户：\(request.prompt)",
+                limit: request.conversationHistoryTurns
+            )
+            appendHistory(
+                "助手：\(answer)",
+                limit: request.conversationHistoryTurns
+            )
+            return answer
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as CodexAppServerError {
@@ -81,10 +127,27 @@ public final class CodexProcessResponder: AIResponder {
 
     public func resetSession() async {
         await appServer?.resetSession()
+        completedTurns = 0
+        configuration = nil
+        history.removeAll()
     }
 
     public func cancel() {
         if let appServer { Task { await appServer.cancel() } }
+    }
+
+    private func appendHistory(_ value: String, limit: Int) {
+        history.append(String(value.prefix(8_000)))
+        pruneHistory(limit: limit)
+    }
+
+    private func pruneHistory(limit: Int) {
+        let entryLimit = max(2, limit * 2)
+        let byteLimit = max(24_000, min(200_000, limit * 16_000))
+        while history.count > entryLimit
+            || history.reduce(0, { $0 + $1.utf8.count }) > byteLimit {
+            history.removeFirst()
+        }
     }
 
     private static func failure(

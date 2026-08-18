@@ -38,7 +38,11 @@ public final class TerminalAgentResponder: AIResponder {
         onTextDelta: @escaping @Sendable (String) -> Void,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
-        let currentConfiguration = "\(request.model)|\(request.reasoningEffort.rawValue)"
+        let currentConfiguration = [
+            request.model,
+            request.reasoningEffort.rawValue,
+            String(request.conversationHistoryTurns)
+        ].joined(separator: "|")
         if configuration != currentConfiguration {
             history.removeAll()
             configuration = currentConfiguration
@@ -131,7 +135,10 @@ public final class TerminalAgentResponder: AIResponder {
                 throw PetFailure.invalidCodexOutput
             }
             let result = await screenToolHandler(.perform(action))
-            appendHistory("JellyPet 动作结果：\(result.message)")
+            appendHistory(
+                "JellyPet 动作结果：\(result.message)",
+                limit: request.conversationHistoryTurns
+            )
         }
         throw PetFailure.agentRuntimeFailed(
             runtime.kind.displayName,
@@ -151,7 +158,9 @@ public final class TerminalAgentResponder: AIResponder {
         )
         let localImage = try imageURL.map { try copyImage($0) }
         defer { if let localImage { try? FileManager.default.removeItem(at: localImage) } }
-        let context = history.suffix(12).joined(separator: "\n\n")
+        let context = history.suffix(
+            request.conversationHistoryTurns * 2
+        ).joined(separator: "\n\n")
         let fullPrompt = context.isEmpty
             ? prompt
             : "此前对话（仅作上下文）：\n\(context)\n\n当前请求：\n\(prompt)"
@@ -186,8 +195,8 @@ public final class TerminalAgentResponder: AIResponder {
             )
         }
         let answer = try parseAnswer(stdout)
-        appendHistory("用户：\(prompt)")
-        appendHistory("助手：\(answer)")
+        appendHistory("用户：\(prompt)", limit: request.conversationHistoryTurns)
+        appendHistory("助手：\(answer)", limit: request.conversationHistoryTurns)
         return answer
     }
 
@@ -299,10 +308,12 @@ public final class TerminalAgentResponder: AIResponder {
         }
     }
 
-    private func appendHistory(_ value: String) {
+    private func appendHistory(_ value: String, limit: Int = 8) {
         history.append(String(value.prefix(8_000)))
-        while history.count > 12
-            || history.reduce(0, { $0 + $1.utf8.count }) > 24_000 {
+        let entryLimit = max(2, limit * 2)
+        let byteLimit = max(24_000, min(200_000, limit * 16_000))
+        while history.count > entryLimit
+            || history.reduce(0, { $0 + $1.utf8.count }) > byteLimit {
             history.removeFirst()
         }
     }

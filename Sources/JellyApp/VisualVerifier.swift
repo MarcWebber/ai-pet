@@ -1,4 +1,5 @@
 import AppKit
+import JellyCore
 
 @MainActor
 enum VisualVerifier {
@@ -8,7 +9,7 @@ enum VisualVerifier {
     }
 
     static func verifyPetTransparency() -> Result {
-        guard let data = JellySpriteView.sheet.tiffRepresentation,
+        guard let data = JellySpriteView.packagedSheet.tiffRepresentation,
               let atlas = NSBitmapImageRep(data: data)
         else {
             return Result(
@@ -66,4 +67,34 @@ enum VisualVerifier {
 
         return Result(passed: passed, message: message)
     }
+
+    static func verifySettingsLayout() -> Result {
+        let form = SettingsFormView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 1_260)
+        )
+        form.render(SettingsViewState(
+            displays: [],
+            selectedDisplayID: nil,
+            assistantPreferences: AssistantPreferences.default,
+            takeoverEnabled: false,
+            showActivityDetails: true,
+            globalShortcut: .controlOptionSpace,
+            answerScrollShortcut: .controlOptionArrows,
+            answerHistoryShortcut: .controlOptionArrows,
+            availableRuntimes: [],
+            modelOptions: ["gpt-5.6-luna"],
+            runtimeText: "布局检查",
+            configurationURL: URL(fileURLWithPath: "/tmp/JellyPet/config.json"),
+            configurationError: nil,
+            spriteSheetURL: nil
+        ))
+        let verification = form.verifyEditableLayout()
+        return Result(
+            passed: verification.passed,
+            message: verification.passed
+                ? "Settings layout verification passed: \(verification.message)."
+                : "Settings layout verification failed: \(verification.message)."
+        )
+    }
+
 }

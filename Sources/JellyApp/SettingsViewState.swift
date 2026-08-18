@@ -1,4 +1,5 @@
 import JellyCore
+import Foundation
 
 struct SettingsViewState {
     let displays: [DisplayDescriptor]
@@ -12,4 +13,7 @@ struct SettingsViewState {
     let availableRuntimes: Set<AgentRuntimeKind>
     let modelOptions: [String]
     let runtimeText: String
+    let configurationURL: URL
+    let configurationError: String?
+    let spriteSheetURL: URL?
 }

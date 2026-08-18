@@ -42,7 +42,6 @@ public struct LocalAgentRuntime: Equatable, Sendable {
 
 public enum LocalAgentRuntimeLocator {
     public static func detect(
-        bundle: Bundle = .main,
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [LocalAgentRuntime] {
@@ -59,12 +58,7 @@ public enum LocalAgentRuntimeLocator {
 
         var result: [LocalAgentRuntime] = []
         if let url = locate(
-            kind: .codex,
             names: ["codex"],
-            configured: [
-                environment["JELLY_CODEX_PATH"],
-                bundle.object(forInfoDictionaryKey: "JellyCodexPath") as? String
-            ],
             directories: directories,
             fileManager: fileManager
         ) {
@@ -75,9 +69,7 @@ public enum LocalAgentRuntimeLocator {
             ))
         }
         if let url = locate(
-            kind: .traex,
             names: ["traex", "traecli", "trae"],
-            configured: [environment["JELLY_TRAEX_PATH"]],
             directories: directories,
             fileManager: fileManager
         ) {
@@ -88,12 +80,7 @@ public enum LocalAgentRuntimeLocator {
             ))
         }
         if let url = locate(
-            kind: .claudeCode,
             names: ["claude"],
-            configured: [environment["JELLY_CLAUDE_PATH"]],
-            directories: directories,
-            fileManager: fileManager
-        ) ?? locateClaudeAlias(
             directories: directories,
             fileManager: fileManager
         ) {
@@ -104,9 +91,7 @@ public enum LocalAgentRuntimeLocator {
             ))
         }
         if let url = locate(
-            kind: .openCode,
             names: ["opencode"],
-            configured: [environment["JELLY_OPENCODE_PATH"]],
             directories: directories,
             fileManager: fileManager
         ) {
@@ -140,19 +125,11 @@ public enum LocalAgentRuntimeLocator {
     }
 
     private static func locate(
-        kind: AgentRuntimeKind,
         names: [String],
-        configured: [String?],
         directories: [URL],
         fileManager: FileManager
     ) -> URL? {
-        let explicit = configured.compactMap { value -> URL? in
-            guard let value else { return nil }
-            let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !path.isEmpty, !path.hasPrefix("__") else { return nil }
-            return URL(fileURLWithPath: path)
-        }
-        let candidates = explicit + directories.flatMap { directory in
+        let candidates = directories.flatMap { directory in
             names.map { directory.appendingPathComponent($0) }
         }
         var seen = Set<String>()
@@ -163,21 +140,6 @@ public enum LocalAgentRuntimeLocator {
         }
     }
 
-    private static func locateClaudeAlias(
-        directories: [URL],
-        fileManager: FileManager
-    ) -> URL? {
-        for directory in directories {
-            let candidate = directory.appendingPathComponent("cc")
-                .standardizedFileURL
-            let path = candidate.path
-            guard path != "/usr/bin/cc",
-                  path != "/Library/Developer/CommandLineTools/usr/bin/cc",
-                  fileManager.isExecutableFile(atPath: path) else { continue }
-            return candidate
-        }
-        return nil
-    }
 }
 
 public actor LocalAgentModelCatalog {

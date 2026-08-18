@@ -19,6 +19,7 @@ let package = Package(
             path: "Sources/JellyApp",
             resources: [
                 .process("Resources/PetSprites.png"),
+                .copy("Resources/JellyPetConfig.json"),
                 .copy("Resources/Skills")
             ]
         ),

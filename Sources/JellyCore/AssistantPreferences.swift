@@ -1,19 +1,5 @@
 import Foundation
 
-public enum CodexModel: String, CaseIterable, Sendable {
-    case terra = "gpt-5.6-terra"
-    case sol = "gpt-5.6-sol"
-    case luna = "gpt-5.6-luna"
-
-    public var displayName: String {
-        switch self {
-        case .terra: "Terra"
-        case .sol: "Sol"
-        case .luna: "Luna"
-        }
-    }
-}
-
 public enum AgentRuntimeKind: String, CaseIterable, Codable, Sendable {
     case automatic
     case codex
@@ -26,13 +12,13 @@ public enum AgentRuntimeKind: String, CaseIterable, Codable, Sendable {
         case .automatic: "自动选择"
         case .codex: "Codex"
         case .traex: "TraeX"
-        case .claudeCode: "Claude Code / cc"
+        case .claudeCode: "Claude Code"
         case .openCode: "OpenCode"
         }
     }
 }
 
-public enum ReasoningEffort: String, CaseIterable, Sendable {
+public enum ReasoningEffort: String, CaseIterable, Codable, Sendable {
     case low
     case medium
     case high
@@ -49,19 +35,23 @@ public struct AssistantPreferences: Equatable, Sendable {
         runtime: .automatic,
         model: automaticModel,
         reasoningEffort: .high,
-        customInstructions: ""
+        customInstructions: "",
+        conversationHistoryTurns:
+            JellyConfiguration.Conversation(historyTurns: 8).historyTurns
     )
 
     public let runtime: AgentRuntimeKind
     public let model: String
     public let reasoningEffort: ReasoningEffort
     public let customInstructions: String
+    public let conversationHistoryTurns: Int
 
     public init(
         runtime: AgentRuntimeKind = .automatic,
         model: String,
         reasoningEffort: ReasoningEffort,
-        customInstructions: String = ""
+        customInstructions: String = "",
+        conversationHistoryTurns: Int = 8
     ) {
         self.runtime = runtime
         let normalizedModel = String(
@@ -71,18 +61,12 @@ public struct AssistantPreferences: Equatable, Sendable {
             ? Self.automaticModel : normalizedModel
         self.reasoningEffort = reasoningEffort
         self.customInstructions = String(customInstructions.prefix(4_000))
-    }
-
-    public init(
-        model: CodexModel,
-        reasoningEffort: ReasoningEffort,
-        customInstructions: String = ""
-    ) {
-        self.init(
-            runtime: .codex,
-            model: model.rawValue,
-            reasoningEffort: reasoningEffort,
-            customInstructions: customInstructions
+        self.conversationHistoryTurns = min(
+            max(
+                conversationHistoryTurns,
+                JellyConfiguration.Conversation.minimumHistoryTurns
+            ),
+            JellyConfiguration.Conversation.maximumHistoryTurns
         )
     }
 

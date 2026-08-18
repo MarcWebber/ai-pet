@@ -4,6 +4,7 @@ import Foundation
 import JellyCore
 import JellyMac
 import OSLog
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppCoordinator {
@@ -37,7 +38,17 @@ final class AppCoordinator {
     private var isShowingAnswerHistory = false
 
     init() {
-        preferencesStore = AppPreferencesStore()
+        let packagedConfiguration = Bundle.main.resourceURL?
+            .appendingPathComponent("JellyPetConfig.json")
+        let configurationTemplateURL = packagedConfiguration.flatMap {
+            FileManager.default.isReadableFile(atPath: $0.path) ? $0 : nil
+        } ?? Bundle.module.url(
+            forResource: "JellyPetConfig",
+            withExtension: "json"
+        )
+        preferencesStore = AppPreferencesStore(
+            configurationTemplateURL: configurationTemplateURL
+        )
         runtimes = LocalAgentRuntimeLocator.detect()
         let packagedSkill = Bundle.main.resourceURL?
             .appendingPathComponent("Skills/human-exam-taking/SKILL.md")
@@ -76,6 +87,7 @@ final class AppCoordinator {
     func start() {
         temporaryArtifactSweeper.removeAll()
         wireActions()
+        applyConfiguredSprite()
         pet.show(on: selectedNSScreen())
         pet.jellyView.apply(activity: .idle)
         updateMenu()
@@ -176,7 +188,17 @@ final class AppCoordinator {
                 self.pet.placeAtBottomRight(of: self.nsScreen(for: id))
                 self.refreshCurrentSettings()
             case let .assistant(value):
+                let previousTurns = self.preferencesStore
+                    .conversationHistoryTurns
                 self.preferencesStore.assistantPreferences = value
+                if previousTurns != value.conversationHistoryTurns {
+                    self.answerHistory = Array(
+                        self.answerHistory.suffix(
+                            value.conversationHistoryTurns
+                        )
+                    )
+                    self.preferencesStore.answerHistory = self.answerHistory
+                }
                 self.refreshCurrentSettings()
             case let .takeover(value):
                 self.preferencesStore.takeoverEnabled = value
@@ -187,6 +209,14 @@ final class AppCoordinator {
                 self.changeAnswerScrollShortcut(value)
             case let .answerHistoryShortcut(value):
                 self.changeAnswerHistoryShortcut(value)
+            case .chooseSprite:
+                self.chooseSpriteSheet()
+            case .resetSprite:
+                self.resetSpriteSheet()
+            case .revealConfiguration:
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    self.preferencesStore.configurationURL
+                ])
             case .finish: self.settings.hide()
             }
         }
@@ -415,7 +445,9 @@ final class AppCoordinator {
         )
         answerHistory.append(entry)
         answerHistory = Array(
-            answerHistory.suffix(AppMetadata.answerHistoryLimit)
+            answerHistory.suffix(
+                preferencesStore.conversationHistoryTurns
+            )
         )
         preferencesStore.answerHistory = answerHistory
         let latestIndex = answerHistory.count - 1
@@ -732,6 +764,14 @@ final class AppCoordinator {
     private func refreshSettings(
         showWindow: Bool
     ) async {
+        _ = preferencesStore.reloadConfiguration()
+        applyConfiguredSprite()
+        answerHistory = Array(
+            answerHistory.suffix(
+                preferencesStore.conversationHistoryTurns
+            )
+        )
+        preferencesStore.answerHistory = answerHistory
         let displays = (try? await screenBackend.availableDisplays()) ?? []
         if preferencesStore.selectedDisplayID == nil,
            let display = displays.first(where: \.isPrimary) ?? displays.first {
@@ -749,13 +789,15 @@ final class AppCoordinator {
             [String]()
         }
         let runtimeText = runtimes.isEmpty
-            ? "未发现兼容 CLI；支持 Codex、TraeX、Claude Code/cc、OpenCode"
+            ? "未发现兼容 CLI；支持 Codex、TraeX、Claude Code、OpenCode"
             : runtimes.map {
                 "\($0.kind.displayName) · \($0.executableURL.path)"
             }.joined(separator: "\n")
         guard !Task.isCancelled else {
             return
         }
+        let spriteSheetURL = preferencesStore.spriteSheetURL
+        let configurationError = preferencesStore.configurationError
         settings.update(
             SettingsViewState(
                 displays: displays,
@@ -770,7 +812,10 @@ final class AppCoordinator {
                     preferencesStore.answerHistoryShortcut,
                 availableRuntimes: Set(runtimes.map(\.kind)),
                 modelOptions: models,
-                runtimeText: runtimeText
+                runtimeText: runtimeText,
+                configurationURL: preferencesStore.configurationURL,
+                configurationError: configurationError,
+                spriteSheetURL: spriteSheetURL
             )
         )
         if showWindow {
@@ -866,6 +911,66 @@ final class AppCoordinator {
             try? registerAnswerHistoryHotkeys(previous)
             showFailure(.answerHistoryShortcutUnavailable)
             refreshCurrentSettings()
+        }
+    }
+
+    private func chooseSpriteSheet() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 8×8 宠物精灵图"
+        panel.message = "请选择正方形 PNG：8 行状态，每行 8 帧动画。"
+        panel.allowedContentTypes = [.png]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.beginSheetModal(for: settings.window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try self.preferencesStore.importSpriteSheet(from: url)
+                    self.applyConfiguredSprite()
+                    self.refreshCurrentSettings()
+                } catch {
+                    self.showSettingsError(
+                        title: "无法使用这张精灵图",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
+    }
+
+    private func resetSpriteSheet() {
+        do {
+            try preferencesStore.resetSpriteSheet()
+            try pet.jellyView.setSpriteSheet(at: nil)
+            refreshCurrentSettings()
+        } catch {
+            showSettingsError(
+                title: "无法恢复默认外形",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func applyConfiguredSprite() {
+        do {
+            try pet.jellyView.setSpriteSheet(
+                at: preferencesStore.spriteSheetURL
+            )
+        } catch {
+            try? pet.jellyView.setSpriteSheet(at: nil)
+        }
+    }
+
+    private func showSettingsError(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        if settings.window.isVisible {
+            alert.beginSheetModal(for: settings.window)
+        } else {
+            alert.runModal()
         }
     }
 

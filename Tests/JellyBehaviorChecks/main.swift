@@ -164,7 +164,18 @@ private enum JellyBehaviorChecksMain {
         let defaultsName = "com.local.JellyPet.behavior-checks"
         let defaults = UserDefaults(suiteName: defaultsName)!
         defaults.removePersistentDomain(forName: defaultsName)
-        let preferences = AppPreferencesStore(defaults: defaults)
+        let configurationRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "JellyPet-Configuration-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer { try? FileManager.default.removeItem(at: configurationRoot) }
+        let configurationURL = configurationRoot
+            .appendingPathComponent("config.json")
+        let preferences = AppPreferencesStore(
+            defaults: defaults,
+            configurationURL: configurationURL
+        )
         check(
             preferences.showActivityDetails,
             "activity details must remain visible by default"
@@ -177,6 +188,28 @@ private enum JellyBehaviorChecksMain {
             preferences.answerHistoryShortcut == .controlOptionArrows,
             "answer history must have a usable default shortcut"
         )
+        preferences.assistantPreferences = AssistantPreferences(
+            runtime: .claudeCode,
+            model: "sonnet",
+            reasoningEffort: .medium,
+            customInstructions: "先给结论",
+            conversationHistoryTurns: 3
+        )
+        let reloadedPreferences = AppPreferencesStore(
+            defaults: defaults,
+            configurationURL: configurationURL
+        )
+        check(
+            reloadedPreferences.assistantPreferences.runtime == .claudeCode
+                && reloadedPreferences.assistantPreferences.model == "sonnet"
+                && reloadedPreferences.assistantPreferences.reasoningEffort
+                    == .medium
+                && reloadedPreferences.assistantPreferences
+                    .conversationHistoryTurns == 3
+                && reloadedPreferences.assistantPreferences
+                    .customInstructions == "先给结论",
+            "assistant and conversation settings must persist in config.json"
+        )
         let history = (0..<10).map { index in
             AnswerHistoryEntry(
                 question: "问题 \(index)",
@@ -187,10 +220,25 @@ private enum JellyBehaviorChecksMain {
         preferences.answerHistory = history
         let storedHistory = preferences.answerHistory
         check(
-            storedHistory.count == AppMetadata.answerHistoryLimit
-                && storedHistory.first?.question == "问题 2"
+            storedHistory.count == 3
+                && storedHistory.first?.question == "问题 7"
                 && storedHistory.last?.answer == "回答 9",
-            "answer history must persist only the most recent entries"
+            "answer history must follow the configured conversation limit"
+        )
+        let spriteSource = URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath
+        ).appendingPathComponent(
+            "Sources/JellyApp/Resources/PetSprites.png"
+        )
+        try preferences.importSpriteSheet(from: spriteSource)
+        check(
+            preferences.spriteSheetURL != nil,
+            "a valid 8x8 PNG sprite sheet must be importable"
+        )
+        try preferences.resetSpriteSheet()
+        check(
+            preferences.spriteSheetURL == nil,
+            "the custom sprite sheet must be resettable"
         )
         let responder = StubResponder()
         let coordinator = TakeoverCoordinator(
@@ -199,18 +247,27 @@ private enum JellyBehaviorChecksMain {
             cleaner: StubCleaner(),
             executor: StubExecutor()
         )
+        let screenPreferences = AssistantPreferences(
+            runtime: .automatic,
+            model: AssistantPreferences.automaticModel,
+            reasoningEffort: .high,
+            conversationHistoryTurns: 3
+        )
         await coordinator.answer(
             displayID: 1,
-            preferences: .default,
+            preferences: screenPreferences,
             question: "第一张截图"
         )
         await coordinator.answer(
             displayID: 1,
-            preferences: .default,
+            preferences: screenPreferences,
             question: "第二张截图"
         )
         check(
             responder.requests.count == 2
+                && responder.requests.allSatisfy {
+                    $0.conversationHistoryTurns == 3
+                }
                 && responder.prepareCount == 2
                 && responder.resetCount == 0
                 && coordinator.canFollowUp,
@@ -233,6 +290,26 @@ private enum JellyBehaviorChecksMain {
             withIntermediateDirectories: true
         )
         defer { try? FileManager.default.removeItem(at: fakeRuntimeRoot) }
+        let fakeCC = fakeRuntimeRoot.appendingPathComponent("cc")
+        try "#!/bin/sh\nexit 0\n".write(
+            to: fakeCC,
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: fakeCC.path
+        )
+        let detectedWithoutClaude = LocalAgentRuntimeLocator.detect(
+            environment: [
+                "PATH": fakeRuntimeRoot.path,
+                "JELLY_CLAUDE_PATH": fakeCC.path
+            ]
+        )
+        check(
+            detectedWithoutClaude.allSatisfy { $0.commandName != "cc" },
+            "cc must never be treated as a Claude Code alias"
+        )
         let fakeClaude = fakeRuntimeRoot.appendingPathComponent("claude")
         try """
         #!/bin/sh
@@ -286,7 +363,7 @@ private enum JellyBehaviorChecksMain {
             let answer = try await liveResponder.respond(
                 to: CodexRequest(
                     imageURL: nil,
-                    prompt: "这是 JellyPet 0.9.0 Runtime 连通性测试。只回复 JELLY_RUNTIME_OK。",
+                    prompt: "这是 JellyPet 0.9.1 Runtime 连通性测试。只回复 JELLY_RUNTIME_OK。",
                     runtime: kind,
                     model: AssistantPreferences.automaticModel,
                     reasoningEffort: .low

@@ -9,6 +9,15 @@ plist="$app/Contents/Info.plist"
 test -x "$app/Contents/MacOS/JellyPet"
 test -f "$plist"
 test -f "$app/Contents/Resources/PetSprites.png"
+test -f "$app/Contents/Resources/JellyPetConfig.json"
+jq -e '
+  .schemaVersion == 1
+  and .conversation.historyTurns == 8
+  and .assistant.runtime == "automatic"
+  and .assistant.model == "auto"
+  and .assistant.reasoningEffort == "high"
+  and .beta.screenTakeover == false
+' "$app/Contents/Resources/JellyPetConfig.json" >/dev/null
 test -f "$app/Contents/Resources/Skills/human-exam-taking/SKILL.md"
 test -f "$app/Contents/Resources/AppIcon.icns"
 test -f "$app/Contents/Resources/Sounds/capture.wav"
@@ -31,11 +40,10 @@ test -n "$(
     -c "Print :NSScreenCaptureUsageDescription" \
     "$plist"
 )"
-codex_path="$(
-  /usr/libexec/PlistBuddy -c "Print :JellyCodexPath" "$plist"
-)"
-if test "$codex_path" != "__CODEX_PATH__"; then
-  test -x "$codex_path"
+if /usr/libexec/PlistBuddy -c "Print :JellyCodexPath" "$plist" \
+    >/dev/null 2>&1; then
+  echo "JellyCodexPath compatibility key must not be packaged." >&2
+  exit 1
 fi
 codesign --verify --deep --strict "$app"
 requirements="$(codesign -d --requirements - "$app" 2>&1)"

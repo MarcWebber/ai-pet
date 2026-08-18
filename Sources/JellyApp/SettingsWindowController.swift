@@ -9,7 +9,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 780),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 820),
             styleMask: [
                 .titled,
                 .closable,
@@ -31,11 +31,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             .moveToActiveSpace,
             .fullScreenAuxiliary
         ]
-        window.minSize = NSSize(width: 560, height: 620)
+        window.minSize = NSSize(width: 660, height: 650)
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        form.frame = NSRect(x: 0, y: 0, width: 620, height: 950)
+        form.frame = NSRect(x: 0, y: 0, width: 700, height: 1_260)
         form.autoresizingMask = [.width]
         scrollView.documentView = form
         window.contentView = scrollView

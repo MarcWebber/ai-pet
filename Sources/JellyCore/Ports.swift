@@ -16,19 +16,28 @@ public struct CodexRequest: Equatable, Sendable {
     public let runtime: AgentRuntimeKind
     public let model: String
     public let reasoningEffort: ReasoningEffort
+    public let conversationHistoryTurns: Int
 
     public init(
         imageURL: URL?,
         prompt: String,
         runtime: AgentRuntimeKind = .automatic,
         model: String,
-        reasoningEffort: ReasoningEffort
+        reasoningEffort: ReasoningEffort,
+        conversationHistoryTurns: Int = 8
     ) {
         self.imageURL = imageURL
         self.prompt = prompt
         self.runtime = runtime
         self.model = model
         self.reasoningEffort = reasoningEffort
+        self.conversationHistoryTurns = min(
+            max(
+                conversationHistoryTurns,
+                JellyConfiguration.Conversation.minimumHistoryTurns
+            ),
+            JellyConfiguration.Conversation.maximumHistoryTurns
+        )
     }
 }
 

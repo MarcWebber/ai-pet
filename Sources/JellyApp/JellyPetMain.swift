@@ -27,6 +27,12 @@ private enum JellyPetMain {
             exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
         }
 
+        if CommandLine.arguments.contains("--verify-settings-layout") {
+            let result = VisualVerifier.verifySettingsLayout()
+            print(result.message)
+            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
+        }
+
         if CommandLine.arguments.contains("--sweep-temporary-artifacts") {
             TemporaryArtifactSweeper().removeAll()
             print("Temporary JellyPet artifacts removed.")

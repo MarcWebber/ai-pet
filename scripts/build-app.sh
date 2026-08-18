@@ -15,9 +15,6 @@ mkdir -p "$build_cache_root/clang" "$build_cache_root/swiftpm"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$build_cache_root/clang}"
 export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$build_cache_root/swiftpm}"
 
-codex_bin="${JELLY_CODEX_PATH:-$(command -v codex || true)}"
-codex_bundle_path="${codex_bin:-__CODEX_PATH__}"
-
 cd "$repo_root"
 bash "$repo_root/scripts/build-icon.sh"
 swift build --disable-sandbox -c release --product JellyPet
@@ -36,6 +33,9 @@ test -d "$resource_bundle"
 install -m 644 \
   "$resource_bundle/PetSprites.png" \
   "$contents/Resources/PetSprites.png"
+install -m 644 \
+  "$resource_bundle/JellyPetConfig.json" \
+  "$contents/Resources/JellyPetConfig.json"
 skill_source="$resource_bundle/Skills/human-exam-taking/SKILL.md"
 skill_target="$contents/Resources/Skills/human-exam-taking"
 test -f "$skill_source"
@@ -46,9 +46,6 @@ install -m 644 \
   "$repo_root/Resources/AppIcon.icns" \
   "$contents/Resources/AppIcon.icns"
 cp -R "$repo_root/Resources/Sounds" "$contents/Resources/Sounds"
-/usr/libexec/PlistBuddy \
-  -c "Set :JellyCodexPath $codex_bundle_path" \
-  "$contents/Info.plist"
 codesign \
   --force \
   --deep \

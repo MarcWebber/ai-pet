@@ -1,0 +1,18 @@
+{
+  "schemaVersion" : 1,
+  "conversation" : {
+    "historyTurns" : 8
+  },
+  "assistant" : {
+    "runtime" : "automatic",
+    "model" : "auto",
+    "reasoningEffort" : "high",
+    "customInstructions" : ""
+  },
+  "appearance" : {
+    "spriteSheet" : null
+  },
+  "beta" : {
+    "screenTakeover" : false
+  }
+}
