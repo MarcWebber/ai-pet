@@ -10,7 +10,7 @@
 | 文件 | SHA-256 |
 | --- | --- |
 | `JellyPet-0.9.0-macos.dmg` | `cc17e3e381bb51e7c8199f96ba68f2197f4067c5d9b9eac1d2bdb50a47224136` |
-| `JellyPet-0.9.0-windows-x64-test.zip` | `f7487f8b3f4c122f61907c1b70f1a67838da27880fa79941b46e8a653d7984c8` |
+| `JellyPet-0.9.0-windows-x64-test.zip` | `a69e79a436a07fe092bf85b57c961f07115dc2bc1938929c731460feed667886` |
 
 下载后可以执行：
 
