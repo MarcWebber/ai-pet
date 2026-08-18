@@ -1,0 +1,27 @@
+{
+  "name": "jellypet-takeover",
+  "version": "0.1.1",
+  "description": "用于接管浏览器和桌面界面的 JellyPet 技能。",
+  "author": {
+    "name": "JellyPet"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "JellyPet 接管",
+    "shortDescription": "观察、操作并验证界面任务",
+    "longDescription": "使用当前可用的浏览器、Playwright 或桌面控制能力完成界面任务，并在每次操作后验证结果。",
+    "developerName": "JellyPet",
+    "category": "Productivity",
+    "capabilities": [
+      "浏览器控制",
+      "Playwright 浏览器控制",
+      "桌面控制"
+    ],
+    "defaultPrompt": [
+      "接管当前浏览器任务并完成它。",
+      "使用当前标签页完成这个流程。",
+      "完成当前界面上的任务。"
+    ]
+  }
+}
