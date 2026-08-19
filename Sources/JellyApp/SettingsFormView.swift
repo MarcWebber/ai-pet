@@ -41,10 +41,10 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let runtimeStatus = NSTextField(wrappingLabelWithString: "检查中…")
     private let spriteStatus = NSTextField(wrappingLabelWithString: "使用内置外形")
     private let configurationStatus = NSTextField(wrappingLabelWithString: "")
-    private let chooseSprite = NSButton()
-    private let resetSprite = NSButton()
-    private let revealConfiguration = NSButton()
-    private let done = NSButton()
+    private let chooseSprite = CartoonButton()
+    private let resetSprite = CartoonButton()
+    private let revealConfiguration = CartoonButton()
+    private let done = CartoonButton()
     private var displays: [DisplayDescriptor] = []
     private var assistant = AssistantPreferences.default
     private var cartoonCards: [CartoonCardView] = []
@@ -80,11 +80,26 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             done
         ]
         let buttonsAreStyled = actionButtons.allSatisfy {
-            !$0.isBordered
-                && $0.image != nil
-                && ($0.layer?.cornerRadius ?? 0) >= 10
+            $0.isCartoonStyled
+                && $0.isContentCentered
                 && $0.bounds.height >= 30
         }
+        let inputPopups = [
+            display,
+            runtime,
+            modelSuggestions,
+            effort,
+            shortcut,
+            answerScrollShortcut,
+            answerHistoryShortcut
+        ]
+        let inputsAreStyled = inputPopups.allSatisfy {
+            !$0.isBordered
+                && ($0.layer?.cornerRadius ?? 0) >= 10
+                && ($0.layer?.borderWidth ?? 0) >= 1
+                && $0.layer?.backgroundColor != nil
+        } && custom.drawsBackground
+            && customScroll.layer?.backgroundColor != nil
         let passed = modelField.bounds.width >= 340
             && customScroll.bounds.width >= 380
             && customScroll.bounds.height >= 96
@@ -93,6 +108,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             && cardsAreVisible
             && cardsAreOrdered
             && buttonsAreStyled
+            && inputsAreStyled
             && modelRect.minX >= bounds.minX
             && modelRect.maxX <= bounds.maxX
             && customRect.minX >= bounds.minX
@@ -100,6 +116,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let message = [
             "cards=\(cardRects.map { Int($0.height) })",
             "buttons=\(actionButtons.count)",
+            "inputs=\(inputPopups.count + 3)",
             "model=\(Int(modelField.bounds.width))px",
             "custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
         ].joined(separator: ", ")
@@ -110,7 +127,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         assistant = state.assistantPreferences
         title.stringValue = "果冻的小窝"
         subtitle.stringValue = "工作模式、模型和外形，都可以在这里慢慢调整"
-        done.title = "完成设置"
         renderDisplays(state)
         renderRuntimes(state)
         renderModels(state)
@@ -233,8 +249,12 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         customScroll.autohidesScrollers = true
         customScroll.borderType = .noBorder
         customScroll.drawsBackground = true
-        customScroll.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.82)
+        let editorBackground = pastelInputColor(.systemPurple, strength: 0.08)
+        custom.drawsBackground = true
+        custom.backgroundColor = editorBackground
+        customScroll.backgroundColor = editorBackground
         customScroll.wantsLayer = true
+        customScroll.layer?.backgroundColor = editorBackground.cgColor
         customScroll.layer?.cornerRadius = 12
         customScroll.layer?.cornerCurve = .continuous
         customScroll.layer?.borderWidth = 1
@@ -247,10 +267,19 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             $0.font = roundedFont(ofSize: 13, weight: .semibold)
             $0.contentTintColor = .systemPurple
         }
+        stylePopup(display, color: .systemBlue)
+        [runtime, modelSuggestions, effort].forEach {
+            stylePopup($0, color: .systemPurple)
+        }
+        [shortcut, answerScrollShortcut, answerHistoryShortcut].forEach {
+            stylePopup($0, color: .systemOrange)
+        }
         modelField.controlSize = .large
         modelField.font = roundedFont(ofSize: 13, weight: .medium)
         modelField.bezelStyle = .roundedBezel
+        styleTextField(modelField, color: .systemPurple)
         historyField.font = roundedFont(ofSize: 13, weight: .semibold)
+        styleTextField(historyField, color: .systemPurple)
         displayDetail.font = roundedFont(ofSize: 12, weight: .medium)
         runtimeStatus.font = roundedFont(ofSize: 12, weight: .medium)
         spriteStatus.font = roundedFont(ofSize: 12.5, weight: .semibold)
@@ -263,36 +292,33 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         configure(
             chooseSprite,
             title: "导入造型",
-            action: #selector(chooseSpriteClicked)
-        )
-        styleActionButton(
-            chooseSprite,
             symbolName: "photo.badge.plus",
-            color: .systemPink
+            color: .systemPink,
+            action: #selector(chooseSpriteClicked)
         )
         configure(
             resetSprite,
             title: "恢复内置",
-            action: #selector(resetSpriteClicked)
-        )
-        styleActionButton(
-            resetSprite,
             symbolName: "arrow.counterclockwise",
-            color: .systemPurple
+            color: .systemPurple,
+            action: #selector(resetSpriteClicked)
         )
         configure(
             revealConfiguration,
             title: "打开配置",
+            symbolName: "folder.fill",
+            color: .systemBlue,
             action: #selector(revealConfigurationClicked)
         )
-        styleActionButton(
-            revealConfiguration,
-            symbolName: "folder.fill",
-            color: .systemBlue
+        configure(
+            done,
+            title: "完成设置",
+            symbolName: "checkmark.circle.fill",
+            color: .systemPurple,
+            filled: true,
+            action: #selector(finishSetup)
         )
-        configure(done, title: "完成设置", action: #selector(finishSetup))
         done.keyEquivalent = "\r"
-        stylePrimaryButton(done, symbolName: "checkmark.circle.fill")
 
         let displayBlock = stack([display, displayDetail], .vertical, 3)
         let modelBlock = stack(
@@ -544,72 +570,67 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func configure(
-        _ button: NSButton,
+        _ button: CartoonButton,
         title: String,
+        symbolName: String,
+        color: NSColor,
+        filled: Bool = false,
         action: Selector
     ) {
-        button.title = title
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.font = roundedFont(ofSize: 12, weight: .semibold)
-        button.contentTintColor = .systemPurple
+        button.applyStyle(
+            title: title,
+            symbolName: symbolName,
+            color: color,
+            filled: filled,
+            font: roundedFont(
+                ofSize: filled ? 13 : 12,
+                weight: filled ? .bold : .semibold
+            )
+        )
         configure(button, action: action)
     }
 
-    private func styleActionButton(
-        _ button: NSButton,
-        symbolName: String,
+    private func stylePopup(
+        _ popup: NSPopUpButton,
         color: NSColor
     ) {
-        button.isBordered = false
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 11
-        button.layer?.cornerCurve = .continuous
-        button.layer?.backgroundColor = color.withAlphaComponent(0.13).cgColor
-        button.layer?.borderWidth = 1
-        button.layer?.borderColor = color.withAlphaComponent(0.28).cgColor
-        button.contentTintColor = color
-        button.font = roundedFont(ofSize: 12, weight: .semibold)
-        button.image = symbolImage(symbolName, pointSize: 12)
-        button.imagePosition = .imageLeading
-        button.imageScaling = .scaleProportionallyDown
-        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 104)
+        popup.isBordered = false
+        popup.focusRingType = .none
+        popup.contentTintColor = color
+        popup.wantsLayer = true
+        popup.layer?.cornerRadius = 10
+        popup.layer?.cornerCurve = .continuous
+        popup.layer?.backgroundColor = pastelInputColor(
+            color,
+            strength: 0.08
+        ).cgColor
+        popup.layer?.borderWidth = 1
+        popup.layer?.borderColor = color.withAlphaComponent(0.20).cgColor
+        popup.heightAnchor.constraint(greaterThanOrEqualToConstant: 30)
             .isActive = true
     }
 
-    private func stylePrimaryButton(
-        _ button: NSButton,
-        symbolName: String
+    private func styleTextField(
+        _ field: NSTextField,
+        color: NSColor
     ) {
-        button.isBordered = false
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 12
-        button.layer?.cornerCurve = .continuous
-        button.layer?.backgroundColor = NSColor.systemPurple.cgColor
-        button.layer?.shadowColor = NSColor.systemPurple.cgColor
-        button.layer?.shadowOpacity = 0.18
-        button.layer?.shadowRadius = 5
-        button.layer?.shadowOffset = NSSize(width: 0, height: -2)
-        button.contentTintColor = .white
-        button.font = roundedFont(ofSize: 13, weight: .bold)
-        button.image = symbolImage(symbolName, pointSize: 13)
-        button.imagePosition = .imageLeading
-        button.imageScaling = .scaleProportionallyDown
+        field.drawsBackground = true
+        field.backgroundColor = pastelInputColor(color, strength: 0.08)
+        field.wantsLayer = true
+        field.layer?.cornerRadius = 10
+        field.layer?.cornerCurve = .continuous
+        field.layer?.borderWidth = 1
+        field.layer?.borderColor = color.withAlphaComponent(0.20).cgColor
     }
 
-    private func symbolImage(
-        _ name: String,
-        pointSize: CGFloat
-    ) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(
-            pointSize: pointSize,
-            weight: .semibold
-        )
-        return NSImage(
-            systemSymbolName: name,
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(configuration)
+    private func pastelInputColor(
+        _ color: NSColor,
+        strength: CGFloat
+    ) -> NSColor {
+        NSColor.controlBackgroundColor.blended(
+            withFraction: strength,
+            of: color
+        ) ?? .controlBackgroundColor
     }
 
     private func roundedFont(

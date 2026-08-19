@@ -188,3 +188,169 @@ final class CartoonIconView: NSView {
         circle.stroke()
     }
 }
+
+@MainActor
+final class CartoonButton: NSButton {
+    private let iconView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let content = NSStackView()
+    private var tracking: NSTrackingArea?
+    private var accentColor = NSColor.systemPurple
+    private var usesFilledStyle = false
+    private var isHovering = false
+    private var isPressing = false
+
+    var isCartoonStyled: Bool {
+        !isBordered
+            && iconView.image != nil
+            && (layer?.cornerRadius ?? 0) >= 10
+    }
+
+    var isContentCentered: Bool {
+        layoutSubtreeIfNeeded()
+        return abs(content.frame.midX - bounds.midX) <= 0.5
+            && abs(content.frame.midY - bounds.midY) <= 0.5
+    }
+
+    override var isEnabled: Bool {
+        didSet { updateAppearance() }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        layer?.cornerCurve = .continuous
+
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        content.orientation = .horizontal
+        content.alignment = .centerY
+        content.spacing = 6
+        content.addArrangedSubview(iconView)
+        content.addArrangedSubview(titleLabel)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+        NSLayoutConstraint.activate([
+            content.centerXAnchor.constraint(equalTo: centerXAnchor),
+            content.centerYAnchor.constraint(equalTo: centerYAnchor),
+            content.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 10),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14)
+        ])
+        updateAppearance()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func applyStyle(
+        title: String,
+        symbolName: String,
+        color: NSColor,
+        filled: Bool,
+        font: NSFont
+    ) {
+        accentColor = color
+        usesFilledStyle = filled
+        titleLabel.stringValue = title
+        titleLabel.font = font
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: 12,
+            weight: .semibold
+        )
+        iconView.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(configuration)
+        setAccessibilityLabel(title)
+        toolTip = title
+        invalidateIntrinsicContentSize()
+        updateAppearance()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let contentWidth = max(0, content.fittingSize.width)
+        return NSSize(
+            width: max(104, contentWidth + 26),
+            height: usesFilledStyle ? 38 : 30
+        )
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+        updateAppearance()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+        updateAppearance()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isPressing = true
+        updateAppearance()
+        super.mouseDown(with: event)
+        isPressing = false
+        updateAppearance()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    private func updateAppearance() {
+        guard let layer else { return }
+        let foreground: NSColor
+        let background: NSColor
+        let border: NSColor
+        if !isEnabled {
+            foreground = .disabledControlTextColor
+            background = accentColor.withAlphaComponent(0.06)
+            border = accentColor.withAlphaComponent(0.10)
+        } else if usesFilledStyle {
+            foreground = .white
+            let whiteMix: CGFloat = isHovering ? 0.12 : 0
+            background = accentColor.blended(
+                withFraction: whiteMix,
+                of: .white
+            ) ?? accentColor
+            border = .clear
+        } else {
+            foreground = accentColor
+            background = accentColor.withAlphaComponent(
+                isPressing ? 0.24 : (isHovering ? 0.18 : 0.12)
+            )
+            border = accentColor.withAlphaComponent(0.28)
+        }
+        layer.backgroundColor = background.cgColor
+        layer.borderWidth = usesFilledStyle ? 0 : 1
+        layer.borderColor = border.cgColor
+        layer.shadowColor = usesFilledStyle ? accentColor.cgColor : nil
+        layer.shadowOpacity = usesFilledStyle && isEnabled ? 0.18 : 0
+        layer.shadowRadius = usesFilledStyle ? 5 : 0
+        layer.shadowOffset = NSSize(width: 0, height: -2)
+        titleLabel.textColor = foreground
+        iconView.contentTintColor = foreground
+        alphaValue = isPressing ? 0.86 : 1
+    }
+}
