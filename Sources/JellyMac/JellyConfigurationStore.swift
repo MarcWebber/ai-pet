@@ -50,7 +50,12 @@ public final class JellyConfigurationStore {
                 JellyConfiguration.self,
                 from: Data(contentsOf: configurationURL)
             )
-            value.normalize()
+            let requiresMigration = value.schemaVersion
+                < JellyConfiguration.currentSchemaVersion
+            value.migrate()
+            if requiresMigration {
+                return save(value)
+            }
             configuration = value
             lastError = nil
             return true
@@ -164,7 +169,7 @@ public final class JellyConfigurationStore {
         if let templateURL,
            let data = try? Data(contentsOf: templateURL),
            var value = try? decoder.decode(JellyConfiguration.self, from: data) {
-            value.normalize()
+            value.migrate()
             configuration = value
         }
         _ = save(configuration)

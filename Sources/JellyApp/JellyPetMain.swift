@@ -28,7 +28,19 @@ private enum JellyPetMain {
         }
 
         if CommandLine.arguments.contains("--verify-settings-layout") {
+            _ = NSApplication.shared
             let result = VisualVerifier.verifySettingsLayout()
+            print(result.message)
+            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
+        }
+
+        if let index = CommandLine.arguments.firstIndex(
+            of: "--render-settings-preview"
+        ), CommandLine.arguments.indices.contains(index + 1) {
+            _ = NSApplication.shared
+            let result = VisualVerifier.renderSettingsPreview(
+                to: URL(fileURLWithPath: CommandLine.arguments[index + 1])
+            )
             print(result.message)
             exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
         }

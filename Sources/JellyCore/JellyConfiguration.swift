@@ -1,7 +1,7 @@
 import Foundation
 
 public struct JellyConfiguration: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
     public static let `default` = JellyConfiguration(
         conversation: Conversation(historyTurns: 8),
         assistant: Assistant(
@@ -11,7 +11,7 @@ public struct JellyConfiguration: Codable, Equatable, Sendable {
             customInstructions: ""
         ),
         appearance: Appearance(spriteSheet: nil),
-        beta: Beta(screenTakeover: false)
+        beta: Beta(screenTakeover: true)
     )
 
     public var schemaVersion: Int
@@ -40,6 +40,13 @@ public struct JellyConfiguration: Codable, Equatable, Sendable {
         conversation.normalize()
         assistant.normalize()
         appearance.normalize()
+    }
+
+    public mutating func migrate() {
+        if schemaVersion < 2 {
+            beta.screenTakeover = true
+        }
+        normalize()
     }
 
     public struct Conversation: Codable, Equatable, Sendable {

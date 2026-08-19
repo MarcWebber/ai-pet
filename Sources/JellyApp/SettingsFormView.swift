@@ -47,6 +47,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let done = NSButton()
     private var displays: [DisplayDescriptor] = []
     private var assistant = AssistantPreferences.default
+    private var cartoonCards: [CartoonCardView] = []
     private let automaticModelLabel = "自动（使用 Runtime 默认模型）"
 
     override init(frame frameRect: NSRect) {
@@ -61,25 +62,39 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         customScroll.layoutSubtreeIfNeeded()
         let modelRect = convert(modelField.bounds, from: modelField)
         let customRect = convert(customScroll.bounds, from: customScroll)
+        let cardRects = cartoonCards.map { convert($0.bounds, from: $0) }
+        let cardsAreVisible = cardRects.allSatisfy {
+            $0.width >= 600
+                && $0.height >= 90
+                && $0.minX >= bounds.minX
+                && $0.maxX <= bounds.maxX
+                && $0.minY >= bounds.minY
+                && $0.maxY <= bounds.maxY
+        }
+        let cardsAreOrdered = zip(cardRects, cardRects.dropFirst())
+            .allSatisfy { pair in pair.0.maxY < pair.1.minY }
         let passed = modelField.bounds.width >= 340
             && customScroll.bounds.width >= 380
             && customScroll.bounds.height >= 96
             && custom.bounds.width >= 360
+            && cartoonCards.count == 4
+            && cardsAreVisible
+            && cardsAreOrdered
             && modelRect.minX >= bounds.minX
             && modelRect.maxX <= bounds.maxX
             && customRect.minX >= bounds.minX
             && customRect.maxX <= bounds.maxX
         return (
             passed,
-            "model=\(Int(modelField.bounds.width))px, custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
+            "cards=\(cardRects.map { Int($0.height) }), model=\(Int(modelField.bounds.width))px, custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
         )
     }
 
     func render(_ state: SettingsViewState) {
         assistant = state.assistantPreferences
-        title.stringValue = "果冻设置"
-        subtitle.stringValue = "稳定功能以截图问答为主；模型、上下文和外形均写入配置文件。"
-        done.title = "完成"
+        title.stringValue = "果冻的小窝"
+        subtitle.stringValue = "把工作方式、脑力和外形调成你喜欢的样子 ✨"
+        done.title = "好啦，完成"
         renderDisplays(state)
         renderRuntimes(state)
         renderModels(state)
@@ -115,10 +130,9 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func buildContent() {
-        let backdrop = NSVisualEffectView()
-        backdrop.material = .sidebar
-        backdrop.blendingMode = .behindWindow
-        title.font = .systemFont(ofSize: 25, weight: .bold)
+        let backdrop = CartoonBackdropView()
+        title.font = .systemFont(ofSize: 27, weight: .heavy)
+        title.textColor = .labelColor
         subtitle.font = .systemFont(ofSize: 13)
         subtitle.textColor = .secondaryLabelColor
         let heading = stack(
@@ -201,8 +215,24 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         customScroll.documentView = custom
         customScroll.hasVerticalScroller = true
         customScroll.autohidesScrollers = true
-        customScroll.borderType = .bezelBorder
+        customScroll.borderType = .noBorder
         customScroll.drawsBackground = true
+        customScroll.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.82)
+        customScroll.wantsLayer = true
+        customScroll.layer?.cornerRadius = 12
+        customScroll.layer?.cornerCurve = .continuous
+        customScroll.layer?.borderWidth = 1
+        customScroll.layer?.borderColor = NSColor.systemPurple
+            .withAlphaComponent(0.22).cgColor
+
+        [display, runtime, modelSuggestions, effort, shortcut,
+         answerScrollShortcut, answerHistoryShortcut].forEach {
+            $0.controlSize = .large
+            $0.font = .systemFont(ofSize: 13, weight: .medium)
+        }
+        modelField.controlSize = .large
+        modelField.font = .systemFont(ofSize: 13)
+        modelField.bezelStyle = .roundedBezel
 
         configure(
             chooseSprite,
@@ -221,6 +251,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         )
         configure(done, title: "完成", action: #selector(finishSetup))
         done.keyEquivalent = "\r"
+        stylePrimaryButton(done)
 
         let displayBlock = stack([display, displayDetail], .vertical, 3)
         let modelBlock = stack(
@@ -233,8 +264,16 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             .horizontal,
             7
         )
+        let betaTitle = stack([
+            label("默认进入屏幕接管", color: .labelColor, weight: .semibold),
+            pill("BETA", color: .systemOrange)
+        ], .horizontal, 7)
+        let betaDescription = stack([
+            betaTitle,
+            label("聊天窗口的模式 Tab 会一直保留，可随时切回截图问答。")
+        ], .vertical, 4)
         let betaBlock = stack([
-            label("启用屏幕接管（Beta，默认关闭）"),
+            betaDescription,
             NSView(),
             takeover
         ], .horizontal, 8)
@@ -258,38 +297,64 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             .vertical,
             6
         )
-        let rows = stack([
-            row("观察屏幕", displayBlock),
+        let screenCard = sectionCard(
+            title: "👀  果冻看哪里",
+            subtitle: "选择它截图问答或接管时观察的显示器。",
+            tint: .systemBlue,
+            rows: [
+                row("观察屏幕", displayBlock)
+            ]
+        )
+        let brainCard = sectionCard(
+            title: "🧠  果冻的大脑",
+            subtitle: "Runtime、模型、思考强度和记忆都会自动写进配置文件。",
+            tint: .systemPurple,
+            rows: [
             row("Agent Runtime", runtime),
             row("模型配置", modelBlock),
             row("思考强度", effort),
             row("保留对话", historyBlock),
             row("自定义指令", customScroll),
+            row("探测结果", runtimeStatus)
+            ]
+        )
+        let appearanceCard = sectionCard(
+            title: "🎨  给果冻换装",
+            subtitle: "可以使用内置造型，也可以导入自己的 8×8 动画图。",
+            tint: .systemPink,
+            rows: [
             row("宠物外形", spriteBlock),
-            row("配置文件", configBlock),
-            row("Beta 功能", betaBlock),
+            row("配置文件", configBlock)
+            ]
+        )
+        let controlsCard = sectionCard(
+            title: "✨  小机关与快捷键",
+            subtitle: "默认开启 Beta 接管；停止任务仍使用唤醒快捷键。",
+            tint: .systemOrange,
+            rows: [
+            row("默认模式", betaBlock),
             row("活动详情", activityBlock),
-            row("探测结果", runtimeStatus),
             row("唤醒快捷键", shortcut),
             row("回答滚动", answerScrollShortcut),
             row("回答切换", answerHistoryShortcut)
-        ], .vertical, 11)
-        rows.arrangedSubviews.forEach {
-            $0.widthAnchor.constraint(equalTo: rows.widthAnchor)
-                .isActive = true
-        }
-        let card = SoftGlassView(cornerRadius: 22)
-        card.addSubview(rows)
-        rows.translatesAutoresizingMaskIntoConstraints = false
+            ]
+        )
         let footer = stack([
             label(
-                "8 行状态：空闲、观察、思考、定位、操作、验证、完成、失败。",
+                "果冻有 8 种状态：空闲、观察、思考、定位、操作、验证、完成、失败。",
                 color: .tertiaryLabelColor
             ),
             NSView(),
             done
         ], .horizontal, 10)
-        let content = stack([heading, card, footer], .vertical, 14)
+        let content = stack([
+            heading,
+            screenCard,
+            brainCard,
+            appearanceCard,
+            controlsCard,
+            footer
+        ], .vertical, 14)
 
         [backdrop, content].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -303,18 +368,60 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
             content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -30),
             content.topAnchor.constraint(equalTo: topAnchor, constant: 20),
+            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -22),
             heading.widthAnchor.constraint(equalTo: content.widthAnchor),
-            card.widthAnchor.constraint(equalTo: content.widthAnchor),
+            screenCard.widthAnchor.constraint(equalTo: content.widthAnchor),
+            brainCard.widthAnchor.constraint(equalTo: content.widthAnchor),
+            appearanceCard.widthAnchor.constraint(equalTo: content.widthAnchor),
+            controlsCard.widthAnchor.constraint(equalTo: content.widthAnchor),
             footer.widthAnchor.constraint(equalTo: content.widthAnchor),
-            rows.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
-            rows.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
-            rows.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
-            rows.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14),
             customScroll.heightAnchor.constraint(equalToConstant: 104),
             modelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
             historyField.widthAnchor.constraint(equalToConstant: 64),
-            done.widthAnchor.constraint(greaterThanOrEqualToConstant: 110)
+            done.widthAnchor.constraint(greaterThanOrEqualToConstant: 124),
+            done.heightAnchor.constraint(equalToConstant: 38)
         ])
+    }
+
+    private func sectionCard(
+        title value: String,
+        subtitle subtitleValue: String,
+        tint: NSColor,
+        rows: [NSView]
+    ) -> CartoonCardView {
+        let sectionTitle = label(
+            value,
+            color: .labelColor,
+            weight: .bold,
+            size: 15
+        )
+        let sectionSubtitle = NSTextField(
+            wrappingLabelWithString: subtitleValue
+        )
+        sectionSubtitle.font = .systemFont(ofSize: 11.5, weight: .medium)
+        sectionSubtitle.textColor = .secondaryLabelColor
+        let rowStack = stack(rows, .vertical, 12)
+        rowStack.arrangedSubviews.forEach {
+            $0.widthAnchor.constraint(equalTo: rowStack.widthAnchor)
+                .isActive = true
+        }
+        let cardContent = stack([
+            stack([sectionTitle, sectionSubtitle], .vertical, 3),
+            rowStack
+        ], .vertical, 14)
+        let card = CartoonCardView(tint: tint)
+        cartoonCards.append(card)
+        card.addSubview(cardContent)
+        cardContent.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            cardContent.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            cardContent.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            cardContent.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
+            cardContent.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18),
+            sectionSubtitle.widthAnchor.constraint(equalTo: cardContent.widthAnchor),
+            rowStack.widthAnchor.constraint(equalTo: cardContent.widthAnchor)
+        ])
+        return card
     }
 
     private func row(_ name: String, _ control: NSView) -> NSStackView {
@@ -331,11 +438,25 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private func label(
         _ value: String,
         color: NSColor = .secondaryLabelColor,
-        weight: NSFont.Weight = .regular
+        weight: NSFont.Weight = .regular,
+        size: CGFloat = 12
     ) -> NSTextField {
         let field = NSTextField(labelWithString: value)
-        field.font = .systemFont(ofSize: 12, weight: weight)
+        field.font = .systemFont(ofSize: size, weight: weight)
         field.textColor = color
+        return field
+    }
+
+    private func pill(_ value: String, color: NSColor) -> NSTextField {
+        let field = label(value, color: color, weight: .bold, size: 9)
+        field.alignment = .center
+        field.wantsLayer = true
+        field.layer?.cornerRadius = 8
+        field.layer?.backgroundColor = color.withAlphaComponent(0.14).cgColor
+        field.layer?.borderWidth = 1
+        field.layer?.borderColor = color.withAlphaComponent(0.30).cgColor
+        field.widthAnchor.constraint(equalToConstant: 42).isActive = true
+        field.heightAnchor.constraint(equalToConstant: 18).isActive = true
         return field
     }
 
@@ -364,7 +485,19 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         button.title = title
         button.bezelStyle = .rounded
         button.controlSize = .small
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.contentTintColor = .systemPurple
         configure(button, action: action)
+    }
+
+    private func stylePrimaryButton(_ button: NSButton) {
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 12
+        button.layer?.cornerCurve = .continuous
+        button.layer?.backgroundColor = NSColor.systemPurple.cgColor
+        button.contentTintColor = .white
+        button.font = .systemFont(ofSize: 13, weight: .bold)
     }
 
     private func configure<Value: RawRepresentable>(

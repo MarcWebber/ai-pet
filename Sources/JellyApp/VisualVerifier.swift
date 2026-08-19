@@ -70,30 +70,77 @@ enum VisualVerifier {
 
     static func verifySettingsLayout() -> Result {
         let form = SettingsFormView(
-            frame: NSRect(x: 0, y: 0, width: 700, height: 1_260)
+            frame: NSRect(x: 0, y: 0, width: 700, height: 1_400)
         )
-        form.render(SettingsViewState(
-            displays: [],
-            selectedDisplayID: nil,
-            assistantPreferences: AssistantPreferences.default,
-            takeoverEnabled: false,
-            showActivityDetails: true,
-            globalShortcut: .controlOptionSpace,
-            answerScrollShortcut: .controlOptionArrows,
-            answerHistoryShortcut: .controlOptionArrows,
-            availableRuntimes: [],
-            modelOptions: ["gpt-5.6-luna"],
-            runtimeText: "布局检查",
-            configurationURL: URL(fileURLWithPath: "/tmp/JellyPet/config.json"),
-            configurationError: nil,
-            spriteSheetURL: nil
-        ))
+        form.render(settingsPreviewState())
         let verification = form.verifyEditableLayout()
         return Result(
             passed: verification.passed,
             message: verification.passed
                 ? "Settings layout verification passed: \(verification.message)."
                 : "Settings layout verification failed: \(verification.message)."
+        )
+    }
+
+    static func renderSettingsPreview(to url: URL) -> Result {
+        let form = SettingsFormView(
+            frame: NSRect(x: 0, y: 0, width: 700, height: 1_400)
+        )
+        form.render(settingsPreviewState())
+        form.layoutSubtreeIfNeeded()
+        guard let bitmap = form.bitmapImageRepForCachingDisplay(in: form.bounds) else {
+            return Result(
+                passed: false,
+                message: "Settings preview failed: unable to create bitmap."
+            )
+        }
+        form.cacheDisplay(in: form.bounds, to: bitmap)
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            return Result(
+                passed: false,
+                message: "Settings preview failed: unable to encode PNG."
+            )
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            return Result(
+                passed: true,
+                message: "Settings preview rendered: \(url.path)"
+            )
+        } catch {
+            return Result(
+                passed: false,
+                message: "Settings preview failed: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private static func settingsPreviewState() -> SettingsViewState {
+        SettingsViewState(
+            displays: [
+                DisplayDescriptor(
+                    id: 1,
+                    name: "内建显示器",
+                    width: 2560,
+                    height: 1600,
+                    isPrimary: true
+                )
+            ],
+            selectedDisplayID: 1,
+            assistantPreferences: AssistantPreferences.default,
+            takeoverEnabled: true,
+            showActivityDetails: true,
+            globalShortcut: .controlOptionSpace,
+            answerScrollShortcut: .controlOptionArrows,
+            answerHistoryShortcut: .controlOptionArrows,
+            availableRuntimes: [.codex, .claudeCode],
+            modelOptions: ["gpt-5.6-luna"],
+            runtimeText: "已找到 Codex 与 Claude Code",
+            configurationURL: URL(
+                fileURLWithPath: "/Users/me/Library/Application Support/JellyPet/config.json"
+            ),
+            configurationError: nil,
+            spriteSheetURL: nil
         )
     }
 

@@ -188,6 +188,45 @@ private enum JellyBehaviorChecksMain {
             preferences.answerHistoryShortcut == .controlOptionArrows,
             "answer history must have a usable default shortcut"
         )
+        check(
+            preferences.takeoverEnabled,
+            "new installs must open in Beta takeover mode by default"
+        )
+        let legacyConfigurationURL = configurationRoot
+            .appendingPathComponent("legacy-config.json")
+        try """
+        {
+          "schemaVersion": 1,
+          "conversation": { "historyTurns": 8 },
+          "assistant": {
+            "runtime": "automatic",
+            "model": "auto",
+            "reasoningEffort": "high",
+            "customInstructions": ""
+          },
+          "appearance": { "spriteSheet": null },
+          "beta": { "screenTakeover": false }
+        }
+        """.write(
+            to: legacyConfigurationURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        let legacyPreferences = AppPreferencesStore(
+            defaults: defaults,
+            configurationURL: legacyConfigurationURL
+        )
+        let migratedConfiguration = try JSONDecoder().decode(
+            JellyConfiguration.self,
+            from: Data(contentsOf: legacyConfigurationURL)
+        )
+        check(
+            legacyPreferences.takeoverEnabled
+                && migratedConfiguration.schemaVersion
+                    == JellyConfiguration.currentSchemaVersion
+                && migratedConfiguration.beta.screenTakeover,
+            "schema 1 installs must migrate the new default takeover mode once"
+        )
         preferences.assistantPreferences = AssistantPreferences(
             runtime: .claudeCode,
             model: "sonnet",
@@ -363,7 +402,7 @@ private enum JellyBehaviorChecksMain {
             let answer = try await liveResponder.respond(
                 to: CodexRequest(
                     imageURL: nil,
-                    prompt: "这是 JellyPet 0.9.1 Runtime 连通性测试。只回复 JELLY_RUNTIME_OK。",
+                    prompt: "这是 JellyPet 0.9.2 Runtime 连通性测试。只回复 JELLY_RUNTIME_OK。",
                     runtime: kind,
                     model: AssistantPreferences.automaticModel,
                     reasoningEffort: .low

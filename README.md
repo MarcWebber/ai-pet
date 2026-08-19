@@ -7,12 +7,12 @@
 JellyPet 是一个面向 macOS 的本地 AI 桌宠。它会调用本机已经安装并登录的
 Agent CLI，截取你选择的屏幕后回答问题，并在本地保留可配置数量的最近对话。
 
-当前版本：**0.9.1**
+当前版本：**0.9.2**
 
 开发平台：**macOS 14+ / Apple Silicon**
 
 > JellyPet 不提供模型账号，也不会把 Runtime 的认证信息打包进应用。
-> 屏幕接管仍是默认关闭的 Beta 功能；稳定主流程是截图问答。
+> 屏幕接管默认开启，但仍明确标记为 Beta；聊天窗口会一直保留“截图问答 / 屏幕接管 · Beta”模式 Tab，可随时切换。
 
 ## 主要能力
 
@@ -23,7 +23,7 @@ Agent CLI，截取你选择的屏幕后回答问题，并在本地保留可配�
 - 模型配置：支持 Runtime 默认模型、探测到的模型或完整手工模型 ID。
 - 自定义外形：导入一张 8×8 PNG 精灵图即可替换 8 种状态动画。
 - 全局滚动：不移动鼠标也能上下滚动当前回答。
-- Beta 接管：用户明确开启后才允许执行鼠标、键盘和浏览器动作。
+- Beta 接管：默认工作模式，可在聊天窗口 Tab 或设置页切回纯截图问答。
 
 ## Runtime
 
@@ -45,7 +45,7 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 
 1. 安装并登录至少一个受支持的 Agent CLI。
 2. 从 [GitHub Releases](https://github.com/MarcWebber/ai-pet/releases) 下载
-   `JellyPet-0.9.1-macos.dmg`，将应用拖入“应用程序”。
+   `JellyPet-0.9.2-macos.dmg`，将应用拖入“应用程序”。
 3. 首次截图时，在系统设置中允许屏幕录制；Beta 接管还需要辅助功能权限。
 4. 单击果冻，输入问题并发送。
 
@@ -75,7 +75,7 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "conversation": {
     "historyTurns": 8
   },
@@ -89,7 +89,7 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
     "spriteSheet": null
   },
   "beta": {
-    "screenTakeover": false
+    "screenTakeover": true
   }
 }
 ```
@@ -100,7 +100,7 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 - `reasoningEffort`：`low`、`medium`、`high` 或 `xhigh`。
 - `customInstructions`：最多 4000 个字符。
 - `spriteSheet`：相对配置目录或绝对路径的 PNG；设置页导入时会自动管理。
-- `screenTakeover`：Beta 开关，默认 `false`。
+- `screenTakeover`：启动聊天窗口时默认选择的模式，`true` 表示屏幕接管；默认 `true`。
 
 屏幕选择、快捷键和活动详情属于本机界面偏好，仍由 macOS 偏好系统保存。
 
@@ -125,9 +125,11 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 
 ## 屏幕接管（Beta）
 
-接管没有进入默认工作模式。只有在设置页打开“屏幕接管（Beta）”，或把
-`beta.screenTakeover` 改为 `true` 后，唤醒操作才进入接管流程。接管可能点击、输入、
-按键、滚动、拖动和导航；请只在可信任务中开启，并用唤醒快捷键停止。
+接管现在是默认工作模式，但模式名称始终带有 `Beta` 标记。聊天窗口会一直显示
+“截图问答 / 屏幕接管 · Beta”两个 Tab；设置页的开关只决定下次打开聊天窗口时默认
+选择哪一个，不会隐藏功能入口。接管可能点击、输入、按键、滚动、拖动和导航；
+请只在可信任务中使用，并用唤醒快捷键停止。旧的 schema 1 配置会在首次读取时迁移到
+schema 2，并把默认模式切换为接管；之后仍可在设置页关闭默认选择。
 
 macOS 当前前台为 Chrome 或 Edge 时，Beta 接管会依次尝试 Playwright、可发现的
 Chrome DevTools Protocol 端点，最后回退到 Accessibility、截图和 CGEvent。

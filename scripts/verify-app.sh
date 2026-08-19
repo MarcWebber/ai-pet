@@ -11,12 +11,12 @@ test -f "$plist"
 test -f "$app/Contents/Resources/PetSprites.png"
 test -f "$app/Contents/Resources/JellyPetConfig.json"
 jq -e '
-  .schemaVersion == 1
+  .schemaVersion == 2
   and .conversation.historyTurns == 8
   and .assistant.runtime == "automatic"
   and .assistant.model == "auto"
   and .assistant.reasoningEffort == "high"
-  and .beta.screenTakeover == false
+  and .beta.screenTakeover == true
 ' "$app/Contents/Resources/JellyPetConfig.json" >/dev/null
 test -f "$app/Contents/Resources/Skills/human-exam-taking/SKILL.md"
 test -f "$app/Contents/Resources/AppIcon.icns"

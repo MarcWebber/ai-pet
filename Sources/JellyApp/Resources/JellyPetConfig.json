@@ -1,5 +1,5 @@
 {
-  "schemaVersion" : 1,
+  "schemaVersion" : 2,
   "conversation" : {
     "historyTurns" : 8
   },
@@ -13,6 +13,6 @@
     "spriteSheet" : null
   },
   "beta" : {
-    "screenTakeover" : false
+    "screenTakeover" : true
   }
 }

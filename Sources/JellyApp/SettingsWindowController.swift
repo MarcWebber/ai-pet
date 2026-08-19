@@ -35,7 +35,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
-        form.frame = NSRect(x: 0, y: 0, width: 700, height: 1_260)
+        form.frame = NSRect(x: 0, y: 0, width: 700, height: 1_400)
         form.autoresizingMask = [.width]
         scrollView.documentView = form
         window.contentView = scrollView

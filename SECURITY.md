@@ -18,9 +18,10 @@
 
 ## Product security boundary
 
-JellyPet 的稳定能力是用户触发的截图问答。屏幕接管为默认关闭的 Beta 功能：
+JellyPet 同时提供截图问答与屏幕接管。屏幕接管默认选中，但仍是明确标记的 Beta 功能：
 
-- 只有在可信环境中才应启用 Beta 接管；
+- 聊天窗口始终显示模式 Tab，可在执行前切换为只观察的截图问答；
+- 只有在可信环境中才应使用 Beta 接管；
 - 工作中可随时通过全局唤醒快捷键停止；
 - 本地 Agent Runtime 继承当前用户的认证状态与 Hooks；
 - JellyPet 不把 Runtime 凭据写入配置或发布包；

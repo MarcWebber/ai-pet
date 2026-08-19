@@ -28,7 +28,7 @@ final class BubblePanelController: NSObject {
     private let send = NSButton()
     private let spinner = NSProgressIndicator()
     private let mode = NSSegmentedControl(
-        labels: ["截图问答", "屏幕接管"],
+        labels: ["截图问答", "屏幕接管 · Beta"],
         trackingMode: .selectOne,
         target: nil,
         action: nil
@@ -81,9 +81,10 @@ final class BubblePanelController: NSObject {
             title: "问果冻当前屏幕",
             badge: "截图问答",
             body: "输入问题并发送，果冻会截取所选屏幕后回答；它不会操作页面。",
-            size: NSSize(width: 410, height: 254),
+            size: NSSize(width: 420, height: 286),
             inputPlaceholder: "例如：这个页面现在需要我做什么？",
             purpose: .screenQuestion,
+            takeoverEnabled: false,
             activates: true,
             near: petFrame,
             on: screen
@@ -105,8 +106,9 @@ final class BubblePanelController: NSObject {
             title: "果冻看到了这些\(position)",
             badge: preferences?.compactLabel ?? "默认配置",
             body: answerBody(message, question: question),
-            size: NSSize(width: 420, height: 286),
+            size: NSSize(width: 430, height: 318),
             inputPlaceholder: "继续问一句…",
+            takeoverEnabled: false,
             activates: true,
             near: petFrame,
             on: screen
@@ -350,6 +352,11 @@ final class BubblePanelController: NSObject {
         spinner.isDisplayedWhenStopped = false
         mode.segmentStyle = .rounded
         mode.setAccessibilityLabel("工作模式")
+        mode.setToolTip("只观察屏幕并回答，不执行操作。", forSegment: 0)
+        mode.setToolTip(
+            "Beta：允许果冻按任务执行鼠标、键盘和浏览器操作。",
+            forSegment: 1
+        )
         mode.target = self
         mode.action = #selector(modeChanged)
 
