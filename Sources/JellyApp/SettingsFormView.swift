@@ -73,6 +73,18 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let cardsAreOrdered = zip(cardRects, cardRects.dropFirst())
             .allSatisfy { pair in pair.0.maxY < pair.1.minY }
+        let actionButtons = [
+            chooseSprite,
+            resetSprite,
+            revealConfiguration,
+            done
+        ]
+        let buttonsAreStyled = actionButtons.allSatisfy {
+            !$0.isBordered
+                && $0.image != nil
+                && ($0.layer?.cornerRadius ?? 0) >= 10
+                && $0.bounds.height >= 30
+        }
         let passed = modelField.bounds.width >= 340
             && customScroll.bounds.width >= 380
             && customScroll.bounds.height >= 96
@@ -80,21 +92,25 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             && cartoonCards.count == 4
             && cardsAreVisible
             && cardsAreOrdered
+            && buttonsAreStyled
             && modelRect.minX >= bounds.minX
             && modelRect.maxX <= bounds.maxX
             && customRect.minX >= bounds.minX
             && customRect.maxX <= bounds.maxX
-        return (
-            passed,
-            "cards=\(cardRects.map { Int($0.height) }), model=\(Int(modelField.bounds.width))px, custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
-        )
+        let message = [
+            "cards=\(cardRects.map { Int($0.height) })",
+            "buttons=\(actionButtons.count)",
+            "model=\(Int(modelField.bounds.width))px",
+            "custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
+        ].joined(separator: ", ")
+        return (passed, message)
     }
 
     func render(_ state: SettingsViewState) {
         assistant = state.assistantPreferences
         title.stringValue = "果冻的小窝"
-        subtitle.stringValue = "把工作方式、脑力和外形调成你喜欢的样子 ✨"
-        done.title = "好啦，完成"
+        subtitle.stringValue = "工作模式、模型和外形，都可以在这里慢慢调整"
+        done.title = "完成设置"
         renderDisplays(state)
         renderRuntimes(state)
         renderModels(state)
@@ -116,8 +132,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         runtimeStatus.stringValue = state.runtimeText
         runtimeStatus.toolTip = state.runtimeText
         spriteStatus.stringValue = state.spriteSheetURL.map {
-            "自定义：\($0.lastPathComponent) · 8 状态 × 8 帧"
-        } ?? "使用内置外形 · 8 状态 × 8 帧"
+            "自定义造型 · \($0.lastPathComponent)"
+        } ?? "内置果冻 · 8 种状态 × 8 帧"
         resetSprite.isEnabled = state.spriteSheetURL != nil
         try? mark.setSpriteSheet(at: state.spriteSheetURL)
         configurationStatus.stringValue = [
@@ -131,9 +147,9 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func buildContent() {
         let backdrop = CartoonBackdropView()
-        title.font = .systemFont(ofSize: 27, weight: .heavy)
-        title.textColor = .labelColor
-        subtitle.font = .systemFont(ofSize: 13)
+        title.font = roundedFont(ofSize: 27, weight: .bold)
+        title.textColor = .systemPurple
+        subtitle.font = roundedFont(ofSize: 13, weight: .medium)
         subtitle.textColor = .secondaryLabelColor
         let heading = stack(
             [mark, stack([title, subtitle], .vertical, 4)],
@@ -199,7 +215,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         custom.isRichText = false
         custom.isAutomaticQuoteSubstitutionEnabled = false
         custom.isAutomaticDashSubstitutionEnabled = false
-        custom.font = .systemFont(ofSize: 13)
+        custom.font = roundedFont(ofSize: 13, weight: .regular)
         custom.textContainerInset = NSSize(width: 7, height: 7)
         custom.frame = NSRect(x: 0, y: 0, width: 390, height: 104)
         custom.minSize = .zero
@@ -228,30 +244,55 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         [display, runtime, modelSuggestions, effort, shortcut,
          answerScrollShortcut, answerHistoryShortcut].forEach {
             $0.controlSize = .large
-            $0.font = .systemFont(ofSize: 13, weight: .medium)
+            $0.font = roundedFont(ofSize: 13, weight: .semibold)
+            $0.contentTintColor = .systemPurple
         }
         modelField.controlSize = .large
-        modelField.font = .systemFont(ofSize: 13)
+        modelField.font = roundedFont(ofSize: 13, weight: .medium)
         modelField.bezelStyle = .roundedBezel
+        historyField.font = roundedFont(ofSize: 13, weight: .semibold)
+        displayDetail.font = roundedFont(ofSize: 12, weight: .medium)
+        runtimeStatus.font = roundedFont(ofSize: 12, weight: .medium)
+        spriteStatus.font = roundedFont(ofSize: 12.5, weight: .semibold)
+        configurationStatus.font = .monospacedSystemFont(
+            ofSize: 10.5,
+            weight: .regular
+        )
+        configurationStatus.textColor = .secondaryLabelColor
 
         configure(
             chooseSprite,
-            title: "选择 PNG…",
+            title: "导入造型",
             action: #selector(chooseSpriteClicked)
+        )
+        styleActionButton(
+            chooseSprite,
+            symbolName: "photo.badge.plus",
+            color: .systemPink
         )
         configure(
             resetSprite,
-            title: "恢复默认",
+            title: "恢复内置",
             action: #selector(resetSpriteClicked)
+        )
+        styleActionButton(
+            resetSprite,
+            symbolName: "arrow.counterclockwise",
+            color: .systemPurple
         )
         configure(
             revealConfiguration,
-            title: "在 Finder 中显示",
+            title: "打开配置",
             action: #selector(revealConfigurationClicked)
         )
-        configure(done, title: "完成", action: #selector(finishSetup))
+        styleActionButton(
+            revealConfiguration,
+            symbolName: "folder.fill",
+            color: .systemBlue
+        )
+        configure(done, title: "完成设置", action: #selector(finishSetup))
         done.keyEquivalent = "\r"
-        stylePrimaryButton(done)
+        stylePrimaryButton(done, symbolName: "checkmark.circle.fill")
 
         let displayBlock = stack([display, displayDetail], .vertical, 3)
         let modelBlock = stack(
@@ -265,12 +306,12 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             7
         )
         let betaTitle = stack([
-            label("默认进入屏幕接管", color: .labelColor, weight: .semibold),
+            label("默认进入屏幕接管", color: .labelColor, weight: .bold),
             pill("BETA", color: .systemOrange)
         ], .horizontal, 7)
         let betaDescription = stack([
             betaTitle,
-            label("聊天窗口的模式 Tab 会一直保留，可随时切回截图问答。")
+            label("打开聊天时优先选择接管，两个模式仍可随时切换。")
         ], .vertical, 4)
         let betaBlock = stack([
             betaDescription,
@@ -298,7 +339,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             6
         )
         let screenCard = sectionCard(
-            title: "👀  果冻看哪里",
+            title: "屏幕观察",
+            symbolName: "display",
             subtitle: "选择它截图问答或接管时观察的显示器。",
             tint: .systemBlue,
             rows: [
@@ -306,44 +348,44 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             ]
         )
         let brainCard = sectionCard(
-            title: "🧠  果冻的大脑",
-            subtitle: "Runtime、模型、思考强度和记忆都会自动写进配置文件。",
+            title: "Agent 大脑",
+            symbolName: "brain.head.profile",
+            subtitle: "选择运行引擎、模型和果冻能够记住的对话。",
             tint: .systemPurple,
             rows: [
-            row("Agent Runtime", runtime),
-            row("模型配置", modelBlock),
-            row("思考强度", effort),
-            row("保留对话", historyBlock),
-            row("自定义指令", customScroll),
-            row("探测结果", runtimeStatus)
+                row("运行引擎", runtime),
+                row("使用模型", modelBlock),
+                row("思考力度", effort),
+                row("记住对话", historyBlock),
+                row("自定义指令", customScroll),
+                row("连接状态", runtimeStatus)
             ]
         )
         let appearanceCard = sectionCard(
-            title: "🎨  给果冻换装",
+            title: "果冻外形",
+            symbolName: "paintpalette.fill",
             subtitle: "可以使用内置造型，也可以导入自己的 8×8 动画图。",
             tint: .systemPink,
             rows: [
-            row("宠物外形", spriteBlock),
-            row("配置文件", configBlock)
+                row("当前造型", spriteBlock),
+                row("配置位置", configBlock)
             ]
         )
         let controlsCard = sectionCard(
-            title: "✨  小机关与快捷键",
-            subtitle: "默认开启 Beta 接管；停止任务仍使用唤醒快捷键。",
+            title: "模式与快捷键",
+            symbolName: "sparkles",
+            subtitle: "设置默认模式，以及不移动鼠标也能使用的快捷操作。",
             tint: .systemOrange,
             rows: [
-            row("默认模式", betaBlock),
-            row("活动详情", activityBlock),
-            row("唤醒快捷键", shortcut),
-            row("回答滚动", answerScrollShortcut),
-            row("回答切换", answerHistoryShortcut)
+                row("默认模式", betaBlock),
+                row("过程详情", activityBlock),
+                row("唤醒 / 停止", shortcut),
+                row("滚动回答", answerScrollShortcut),
+                row("切换回答", answerHistoryShortcut)
             ]
         )
         let footer = stack([
-            label(
-                "果冻有 8 种状态：空闲、观察、思考、定位、操作、验证、完成、失败。",
-                color: .tertiaryLabelColor
-            ),
+            chip("8 种状态 · 每种 8 帧动画", color: .systemPurple),
             NSView(),
             done
         ], .horizontal, 10)
@@ -385,6 +427,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func sectionCard(
         title value: String,
+        symbolName: String,
         subtitle subtitleValue: String,
         tint: NSColor,
         rows: [NSView]
@@ -398,15 +441,25 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let sectionSubtitle = NSTextField(
             wrappingLabelWithString: subtitleValue
         )
-        sectionSubtitle.font = .systemFont(ofSize: 11.5, weight: .medium)
+        sectionSubtitle.font = roundedFont(ofSize: 12, weight: .medium)
         sectionSubtitle.textColor = .secondaryLabelColor
+        let headerText = stack(
+            [sectionTitle, sectionSubtitle],
+            .vertical,
+            3
+        )
+        headerText.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = stack([
+            CartoonIconView(symbolName: symbolName, tint: tint),
+            headerText
+        ], .horizontal, 11)
         let rowStack = stack(rows, .vertical, 12)
         rowStack.arrangedSubviews.forEach {
             $0.widthAnchor.constraint(equalTo: rowStack.widthAnchor)
                 .isActive = true
         }
         let cardContent = stack([
-            stack([sectionTitle, sectionSubtitle], .vertical, 3),
+            header,
             rowStack
         ], .vertical, 14)
         let card = CartoonCardView(tint: tint)
@@ -418,7 +471,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             cardContent.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
             cardContent.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
             cardContent.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18),
-            sectionSubtitle.widthAnchor.constraint(equalTo: cardContent.widthAnchor),
+            header.widthAnchor.constraint(equalTo: cardContent.widthAnchor),
             rowStack.widthAnchor.constraint(equalTo: cardContent.widthAnchor)
         ])
         return card
@@ -442,7 +495,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         size: CGFloat = 12
     ) -> NSTextField {
         let field = NSTextField(labelWithString: value)
-        field.font = .systemFont(ofSize: size, weight: weight)
+        field.font = roundedFont(ofSize: size, weight: weight)
         field.textColor = color
         return field
     }
@@ -457,6 +510,19 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         field.layer?.borderColor = color.withAlphaComponent(0.30).cgColor
         field.widthAnchor.constraint(equalToConstant: 42).isActive = true
         field.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        return field
+    }
+
+    private func chip(_ value: String, color: NSColor) -> NSTextField {
+        let field = label(value, color: color, weight: .semibold, size: 11)
+        field.alignment = .center
+        field.wantsLayer = true
+        field.layer?.cornerRadius = 11
+        field.layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
+        field.layer?.borderWidth = 1
+        field.layer?.borderColor = color.withAlphaComponent(0.22).cgColor
+        field.widthAnchor.constraint(equalToConstant: 168).isActive = true
+        field.heightAnchor.constraint(equalToConstant: 24).isActive = true
         return field
     }
 
@@ -485,19 +551,78 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         button.title = title
         button.bezelStyle = .rounded
         button.controlSize = .small
-        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.font = roundedFont(ofSize: 12, weight: .semibold)
         button.contentTintColor = .systemPurple
         configure(button, action: action)
     }
 
-    private func stylePrimaryButton(_ button: NSButton) {
+    private func styleActionButton(
+        _ button: NSButton,
+        symbolName: String,
+        color: NSColor
+    ) {
+        button.isBordered = false
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 11
+        button.layer?.cornerCurve = .continuous
+        button.layer?.backgroundColor = color.withAlphaComponent(0.13).cgColor
+        button.layer?.borderWidth = 1
+        button.layer?.borderColor = color.withAlphaComponent(0.28).cgColor
+        button.contentTintColor = color
+        button.font = roundedFont(ofSize: 12, weight: .semibold)
+        button.image = symbolImage(symbolName, pointSize: 12)
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        button.widthAnchor.constraint(greaterThanOrEqualToConstant: 104)
+            .isActive = true
+    }
+
+    private func stylePrimaryButton(
+        _ button: NSButton,
+        symbolName: String
+    ) {
         button.isBordered = false
         button.wantsLayer = true
         button.layer?.cornerRadius = 12
         button.layer?.cornerCurve = .continuous
         button.layer?.backgroundColor = NSColor.systemPurple.cgColor
+        button.layer?.shadowColor = NSColor.systemPurple.cgColor
+        button.layer?.shadowOpacity = 0.18
+        button.layer?.shadowRadius = 5
+        button.layer?.shadowOffset = NSSize(width: 0, height: -2)
         button.contentTintColor = .white
-        button.font = .systemFont(ofSize: 13, weight: .bold)
+        button.font = roundedFont(ofSize: 13, weight: .bold)
+        button.image = symbolImage(symbolName, pointSize: 13)
+        button.imagePosition = .imageLeading
+        button.imageScaling = .scaleProportionallyDown
+    }
+
+    private func symbolImage(
+        _ name: String,
+        pointSize: CGFloat
+    ) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: pointSize,
+            weight: .semibold
+        )
+        return NSImage(
+            systemSymbolName: name,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(configuration)
+    }
+
+    private func roundedFont(
+        ofSize size: CGFloat,
+        weight: NSFont.Weight
+    ) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size, weight: weight)
+        guard let descriptor = base.fontDescriptor.withDesign(.rounded),
+              let font = NSFont(descriptor: descriptor, size: size)
+        else {
+            return base
+        }
+        return font
     }
 
     private func configure<Value: RawRepresentable>(

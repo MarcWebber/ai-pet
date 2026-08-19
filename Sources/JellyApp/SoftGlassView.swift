@@ -140,3 +140,51 @@ final class CartoonCardView: NSView {
         }
     }
 }
+
+@MainActor
+final class CartoonIconView: NSView {
+    private let imageView = NSImageView()
+    private let tint: NSColor
+
+    override var isFlipped: Bool { true }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 36, height: 36)
+    }
+
+    init(symbolName: String, tint: NSColor) {
+        self.tint = tint
+        super.init(frame: .zero)
+        let configuration = NSImage.SymbolConfiguration(
+            pointSize: 16,
+            weight: .semibold
+        )
+        imageView.image = NSImage(
+            systemSymbolName: symbolName,
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(configuration)
+        imageView.contentTintColor = tint
+        imageView.imageScaling = .scaleProportionallyDown
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(imageView)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: 36),
+            heightAnchor.constraint(equalToConstant: 36),
+            imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            imageView.widthAnchor.constraint(equalToConstant: 20),
+            imageView.heightAnchor.constraint(equalToConstant: 20)
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let circle = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
+        tint.withAlphaComponent(0.14).setFill()
+        circle.fill()
+        tint.withAlphaComponent(0.34).setStroke()
+        circle.lineWidth = 1.2
+        circle.stroke()
+    }
+}
