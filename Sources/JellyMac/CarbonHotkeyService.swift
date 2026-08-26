@@ -59,11 +59,6 @@ public final class CarbonHotkeyService {
         }
     }
 
-    public func unregisterAnswerScrolling() {
-        unregister(.answerScrollUp)
-        unregister(.answerScrollDown)
-    }
-
     public func registerAnswerHistoryNavigation(
         shortcut: AnswerHistoryShortcut,
         onPrevious: @escaping () -> Void,
@@ -90,11 +85,6 @@ public final class CarbonHotkeyService {
             unregister(.answerHistoryNext)
             throw PetFailure.answerHistoryShortcutUnavailable
         }
-    }
-
-    public func unregisterAnswerHistoryNavigation() {
-        unregister(.answerHistoryPrevious)
-        unregister(.answerHistoryNext)
     }
 
     public func unregister() {

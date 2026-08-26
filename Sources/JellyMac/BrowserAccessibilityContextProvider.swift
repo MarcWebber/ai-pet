@@ -23,6 +23,15 @@ public enum BrowserSemanticPolicy {
         case kAXMenuItemRole: .menuItem
         case kAXPopUpButtonRole: .popUpButton
         case kAXScrollAreaRole, "AXWebArea": .scrollArea
+        case "AXDialog", "AXSheet": .dialog
+        case kAXGroupRole, "AXTabGroup": .group
+        case kAXListRole: .list
+        case "AXListItem": .listItem
+        case kAXRowRole: .row
+        case kAXCellRole: .cell
+        case "AXTab": .tab
+        case "AXHeading": .heading
+        case kAXStaticTextRole: .staticText
         default: nil
         }
     }
@@ -125,16 +134,33 @@ public enum BrowserSemanticPolicy {
 
 @MainActor
 public final class BrowserAccessibilityContextProvider: SemanticContextProviding {
-    private struct Node { let element: AXUIElement; let visibleBounds: CGRect }
+    private struct Node {
+        let element: AXUIElement
+        let visibleBounds: CGRect
+        let semanticParentID: Int?
+    }
+    private struct Candidate {
+        let temporaryID: Int
+        let parentTemporaryID: Int?
+        let semantic: SemanticElement
+        let element: AXUIElement
+    }
     private struct Traversal {
-        var candidates: [SemanticElement] = []
+        var candidates: [Candidate] = []
         var pageURL: String?
         var text: [String] = []
     }
+    private var observationID = UUID().uuidString.lowercased()
+    private var nativeElements: [String: AXUIElement] = [:]
 
     public init() {}
 
     public func snapshot(displayID: UInt32) async -> SemanticSnapshot? {
+        // AX references are intentionally valid for one observation only. Clear them even
+        // when the next observation fails so an old element can never be acted upon later.
+        observationID = UUID().uuidString.lowercased()
+        nativeElements.removeAll(keepingCapacity: true)
+        let currentObservationID = observationID
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         let bounds = CGDisplayBounds(displayID)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
@@ -153,18 +179,26 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
 
         var elements: [SemanticElement] = []
         let sorted = traversal.candidates.sorted {
-            ($0.frame.y, $0.frame.x) < ($1.frame.y, $1.frame.x)
+            ($0.semantic.frame.y, $0.semantic.frame.x)
+                < ($1.semantic.frame.y, $1.semantic.frame.x)
         }.prefix(250)
-        for (index, candidate) in sorted.enumerated() {
-            let elementID = "e\(index + 1)"
+        var currentNativeElements: [String: AXUIElement] = [:]
+        let assignedIDs = Dictionary(uniqueKeysWithValues: sorted.enumerated().map {
+            ($0.element.temporaryID, "ax-\(currentObservationID)-e\($0.offset + 1)")
+        })
+        for candidate in sorted {
+            guard let elementID = assignedIDs[candidate.temporaryID] else { continue }
             let semantic = SemanticElement(
-                id: elementID, role: candidate.role,
-                label: candidate.label, value: candidate.value,
-                frame: candidate.frame, isEnabled: candidate.isEnabled
+                id: elementID,
+                parentID: candidate.parentTemporaryID.flatMap { assignedIDs[$0] },
+                role: candidate.semantic.role,
+                label: candidate.semantic.label, value: candidate.semantic.value,
+                frame: candidate.semantic.frame, isEnabled: candidate.semantic.isEnabled
             )
             elements.append(semantic)
+            currentNativeElements[elementID] = candidate.element
         }
-        return SemanticSnapshot(
+        let snapshot = SemanticSnapshot(
             applicationName: BrowserSemanticPolicy.compact(app.localizedName)
                 ?? app.bundleIdentifier ?? "",
             windowTitle: BrowserSemanticPolicy.compact(window.axString(kAXTitleAttribute)) ?? "",
@@ -172,6 +206,14 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
             readableText: text,
             elements: elements
         )
+        guard currentObservationID == observationID else { return nil }
+        nativeElements = currentNativeElements
+        return snapshot
+    }
+
+    func nativeElement(for id: String) -> AXUIElement? {
+        guard id.hasPrefix("ax-\(observationID)-") else { return nil }
+        return nativeElements[id]
     }
 
     private func frontWindow(_ app: AXUIElement, intersecting bounds: CGRect?) -> AXUIElement? {
@@ -192,7 +234,11 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
         displayBounds: CGRect,
         visibleBounds: CGRect
     ) async -> Traversal {
-        var result = Traversal(), stack = [Node(element: window, visibleBounds: visibleBounds)]
+        var result = Traversal(), stack = [Node(
+            element: window,
+            visibleBounds: visibleBounds,
+            semanticParentID: nil
+        )]
         var visited = 0
         while let node = stack.popLast(), visited < 2_500, !Task.isCancelled {
             visited += 1
@@ -204,9 +250,17 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
                 guard frame.intersects(node.visibleBounds) else { continue }
                 if clips(element) { childBounds = frame.intersection(node.visibleBounds) }
             }
+            var descendantParentID = node.semanticParentID
             if result.candidates.count < 250,
-               let candidate = candidate(element, displayBounds, node.visibleBounds) {
+               let candidate = candidate(
+                   element,
+                   displayBounds,
+                   node.visibleBounds,
+                   temporaryID: result.candidates.count,
+                   parentTemporaryID: node.semanticParentID
+               ) {
                 result.candidates.append(candidate)
+                descendantParentID = candidate.temporaryID
             }
             if let role = element.axString(kAXRoleAttribute) {
                 if role == "AXWebArea", result.pageURL == nil {
@@ -223,7 +277,11 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
                 }
             }
             stack += element.axElements(kAXChildrenAttribute).reversed().map {
-                Node(element: $0, visibleBounds: childBounds)
+                Node(
+                    element: $0,
+                    visibleBounds: childBounds,
+                    semanticParentID: descendantParentID
+                )
             }
         }
         return result
@@ -232,31 +290,60 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
     private func candidate(
         _ element: AXUIElement,
         _ displayBounds: CGRect,
-        _ visibleBounds: CGRect
-    ) -> SemanticElement? {
+        _ visibleBounds: CGRect,
+        temporaryID: Int,
+        parentTemporaryID: Int?
+    ) -> Candidate? {
         guard let role = semanticRole(element),
-              element.axBool(kAXEnabledAttribute) != false,
               let frame = element.axFrame,
               let normalized = BrowserSemanticPolicy.normalizedFrame(
                   frame.intersection(visibleBounds), displayBounds: displayBounds
               ) else { return nil }
-        return SemanticElement(
-            id: "", role: role, label: element.axLabel,
-            value: BrowserSemanticPolicy.safeValue(
-                role: role,
-                subrole: element.axString(kAXSubroleAttribute),
-                value: element.axString(kAXValueAttribute)
+        let value = BrowserSemanticPolicy.safeValue(
+            role: role,
+            subrole: element.axString(kAXSubroleAttribute),
+            value: element.axString(kAXValueAttribute)
+        )
+        let label = element.axLabel.isEmpty
+            ? BrowserSemanticPolicy.compact(value) ?? ""
+            : element.axLabel
+        guard shouldExpose(role: role, label: label, value: value) else { return nil }
+        return Candidate(
+            temporaryID: temporaryID,
+            parentTemporaryID: parentTemporaryID,
+            semantic: SemanticElement(
+                id: "", role: role, label: label, value: value,
+                frame: normalized,
+                isEnabled: element.axBool(kAXEnabledAttribute) != false
             ),
-            frame: normalized, isEnabled: true
+            element: element
         )
     }
 
     private func semanticRole(_ element: AXUIElement) -> SemanticElementRole? {
         guard let role = element.axString(kAXRoleAttribute) else { return nil }
+        if ["AXDialog", "AXSheet"].contains(element.axString(kAXSubroleAttribute)) {
+            return .dialog
+        }
         return BrowserSemanticPolicy.role(
             role, label: element.axLabel,
             identifier: element.axString("AXIdentifier")
         )
+    }
+
+    private func shouldExpose(
+        role: SemanticElementRole,
+        label: String,
+        value: String?
+    ) -> Bool {
+        switch role {
+        case .group:
+            return !label.isEmpty || value?.isEmpty == false
+        case .heading, .staticText:
+            return !label.isEmpty
+        default:
+            return true
+        }
     }
 
     private func clips(_ element: AXUIElement) -> Bool {

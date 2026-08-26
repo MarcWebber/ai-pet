@@ -2,17 +2,9 @@ import Foundation
 import JellyCore
 
 public final class TerminalAgentResponder: AIResponder {
-    private struct Directive: Decodable {
-        let type: String
-        let message: String?
-        let action: ScreenAction?
-    }
-
     private let runtime: LocalAgentRuntime
     private let workingDirectory: URL
     private let runner: FoundationProcessRunner
-    private let pendingLock = NSLock()
-    private var pendingInstructions: [String] = []
     private var history: [String] = []
     private var configuration: String?
 
@@ -47,11 +39,10 @@ public final class TerminalAgentResponder: AIResponder {
             history.removeAll()
             configuration = currentConfiguration
         }
-        if let screenToolHandler {
-            return try await runTakeover(
-                request,
-                onTextDelta: onTextDelta,
-                screenToolHandler: screenToolHandler
+        guard screenToolHandler == nil else {
+            throw PetFailure.agentRuntimeFailed(
+                runtime.kind.displayName,
+                "当前 Runtime 只支持截图问答；屏幕接管请选择 Codex 或 TraeX。"
             )
         }
         let answer = try await invoke(
@@ -63,12 +54,11 @@ public final class TerminalAgentResponder: AIResponder {
         return answer
     }
 
-    public func steer(_ instruction: String) async throws {
-        let value = String(instruction.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).prefix(4_000))
-        guard !value.isEmpty else { return }
-        pendingLock.withLock { pendingInstructions.append(value) }
+    public func steer(_: String) async throws {
+        throw PetFailure.agentRuntimeFailed(
+            runtime.kind.displayName,
+            "当前 Runtime 不支持接管中的补充指令。"
+        )
     }
 
     public func prepareForNextTurn() async {}
@@ -77,73 +67,10 @@ public final class TerminalAgentResponder: AIResponder {
         runner.cancel()
         history.removeAll()
         configuration = nil
-        pendingLock.withLock { pendingInstructions.removeAll() }
     }
 
     public func cancel() {
         runner.cancel()
-    }
-
-    private func runTakeover(
-        _ request: CodexRequest,
-        onTextDelta: @escaping @Sendable (String) -> Void,
-        screenToolHandler: ScreenToolHandler
-    ) async throws -> String {
-        for step in 1...40 {
-            try Task.checkCancellation()
-            let observation = await screenToolHandler(.observe)
-            guard observation.success else {
-                throw PetFailure.agentRuntimeFailed(
-                    runtime.kind.displayName,
-                    observation.message
-                )
-            }
-            let imageURL = try observation.screenshotPNG.map {
-                try writeImage($0, name: "observation-\(step).png")
-            }
-            defer { if let imageURL { try? FileManager.default.removeItem(at: imageURL) } }
-            let additions = takePendingInstructions()
-            let prompt = """
-            你正在通过 JellyPet 接管当前界面。不得调用终端、文件编辑器或 Runtime 自带的电脑工具；只能根据本轮观察选择 JellyPet 动作。
-            用户任务：\(request.prompt)
-            \(additions.isEmpty ? "" : "用户最新补充：\(additions.joined(separator: "\n"))")
-            第 \(step) 轮当前观察：
-            \(observation.message)
-
-            只返回一个 JSON 对象，不要代码围栏：
-            - 继续操作：{"type":"action","action":<动作>}
-            - 已完成：{"type":"final","message":"给用户的简短结果"}
-            动作 kind 仅可为 click、doubleClick、drag、typeText、keyPress、navigate、scroll、wait；视觉坐标为 0 到 1000。每次只给一个动作，动作后会重新观察。
-            """
-            let raw = try await invoke(
-                prompt: prompt,
-                imageURL: imageURL,
-                request: request
-            )
-            guard let directive = decodeDirective(raw) else {
-                onTextDelta(raw)
-                return raw
-            }
-            if directive.type == "final" {
-                let answer = directive.message?.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ) ?? "任务已完成。"
-                onTextDelta(answer)
-                return answer
-            }
-            guard directive.type == "action", let action = directive.action else {
-                throw PetFailure.invalidCodexOutput
-            }
-            let result = await screenToolHandler(.perform(action))
-            appendHistory(
-                "JellyPet 动作结果：\(result.message)",
-                limit: request.conversationHistoryTurns
-            )
-        }
-        throw PetFailure.agentRuntimeFailed(
-            runtime.kind.displayName,
-            "连续操作达到 40 次，已停止以避免失控。"
-        )
     }
 
     private func invoke(
@@ -262,50 +189,12 @@ public final class TerminalAgentResponder: AIResponder {
         return String(value.prefix(200_000))
     }
 
-    private func decodeDirective(_ output: String) -> Directive? {
-        var value = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("```") {
-            value = value.replacingOccurrences(
-                of: #"^```(?:json)?\s*|\s*```$"#,
-                with: "",
-                options: .regularExpression
-            )
-        }
-        if let first = value.firstIndex(of: "{"),
-           let last = value.lastIndex(of: "}") {
-            value = String(value[first...last])
-        }
-        return try? JSONDecoder().decode(
-            Directive.self,
-            from: Data(value.utf8)
-        )
-    }
-
     private func copyImage(_ source: URL) throws -> URL {
         let target = workingDirectory.appendingPathComponent(
             "input-\(UUID().uuidString).png"
         )
         try FileManager.default.copyItem(at: source, to: target)
         return target
-    }
-
-    private func writeImage(_ data: Data, name: String) throws -> URL {
-        try FileManager.default.createDirectory(
-            at: workingDirectory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        let target = workingDirectory.appendingPathComponent(name)
-        try data.write(to: target, options: .atomic)
-        return target
-    }
-
-    private func takePendingInstructions() -> [String] {
-        pendingLock.withLock {
-            let values = pendingInstructions
-            pendingInstructions.removeAll()
-            return values
-        }
     }
 
     private func appendHistory(_ value: String, limit: Int = 8) {

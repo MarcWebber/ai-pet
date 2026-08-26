@@ -16,10 +16,10 @@ public final class TakeoverCoordinator {
         let request: TakeoverRequest
         var currentSnapshot: SemanticSnapshot?
         var hasScreenshot = false
-        var requiresObservation = true
-        var observations = 0
-        var actions = 0
         var sequence = 0
+        var progress = TakeoverProgressMonitor()
+        var terminalStopReason: String?
+        var uncertainActivationSignatures: [String: UInt64] = [:]
         let startedAt = Date()
     }
 
@@ -32,7 +32,6 @@ public final class TakeoverCoordinator {
     private var session: Session?
     private var events: [TakeoverEvent] = []
     private var answerPreferences: AssistantPreferences?
-    private var conversation: [String] = []
     private var streamID: UUID?
     private var streamedResponse = ""
 
@@ -134,9 +133,6 @@ public final class TakeoverCoordinator {
             (question ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 .prefix(4_000)
         )
-        if !question.isEmpty {
-            appendConversation("用户：\(question)")
-        }
         await responder.prepareForNextTurn()
         guard token == generation else { return }
         publish(.capturing)
@@ -168,13 +164,10 @@ public final class TakeoverCoordinator {
         }
         invalidate(keepsAnswerContext: true)
         let token = generation
-        let context = conversation.joined(separator: "\n")
-        appendConversation("用户：\(question)")
         publish(.deciding, snapshot.message)
         await requestAnswer(
             imageURL: nil,
             prompt: ResponsePrompts.followUp(
-                context: context,
                 question: question,
                 customInstructions: preferences.customInstructions
             ),
@@ -235,6 +228,12 @@ public final class TakeoverCoordinator {
                 message: "JellyPet 会话已经结束。"
             )
         }
+        if let reason = session?.terminalStopReason {
+            return ScreenToolResult(
+                success: false,
+                message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
+            )
+        }
         session?.sequence += 1
         let sequence = session?.sequence ?? 1
 
@@ -243,7 +242,157 @@ public final class TakeoverCoordinator {
             return await observe(sequence: sequence, token: token)
         case let .perform(action):
             return await perform(action, sequence: sequence, token: token)
+        case let .activateAndVerify(request):
+            return await activateAndVerify(request, sequence: sequence, token: token)
         }
+    }
+
+    private func activateAndVerify(
+        _ request: ActivateAndVerifyRequest,
+        sequence: Int,
+        token: UUID
+    ) async -> ScreenToolResult {
+        guard await refreshObservation(sequence: sequence, token: token) else {
+            return ScreenToolResult(
+                success: false,
+                message: "无法获取最新界面，已停止激活。"
+            )
+        }
+        if postconditionSatisfied(request) {
+            return ScreenToolResult(
+                success: true,
+                message: "预期结果已经存在，无需重复激活目标。"
+            )
+        }
+        guard let activationKey = resolvedActivationKey(request.targetLocator),
+              let currentSignature = semanticObservationSignature() else {
+            return ScreenToolResult(
+                success: false,
+                message: "最新界面中无法唯一定位激活目标，未执行点击。"
+            )
+        }
+        guard session?.uncertainActivationSignatures[activationKey]
+            != currentSignature else {
+            return ScreenToolResult(
+                success: false,
+                message: "该目标上一次激活的结果仍不确定，且界面没有变化；不会立即重复激活。"
+            )
+        }
+        // Reserve before touching the executor. An executor error can be
+        // ambiguous. A retry becomes available after a newly observed semantic
+        // state proves that the user or another action changed the context.
+        session?.uncertainActivationSignatures[activationKey] = currentSignature
+        let actionResult = await perform(
+            .click(.locator(request.targetLocator)),
+            sequence: sequence,
+            token: token
+        )
+        guard actionResult.success else { return actionResult }
+        guard await refreshObservation(sequence: sequence, token: token) else {
+            return ScreenToolResult(
+                success: false,
+                message: "激活后无法重新观察，不能确认结果；不会重复激活。"
+            )
+        }
+        guard postconditionSatisfied(request) else {
+            if let signature = semanticObservationSignature() {
+                session?.uncertainActivationSignatures[activationKey] = signature
+            }
+            return ScreenToolResult(
+                success: false,
+                message: "激活动作已执行一次，但后置条件未满足；界面变化前不会重复激活。"
+            )
+        }
+        session?.uncertainActivationSignatures.removeValue(forKey: activationKey)
+        return ScreenToolResult(
+            success: true,
+            message: "目标已激活一次，并已在最新观察中验证后置条件。"
+        )
+    }
+
+    private func refreshObservation(sequence: Int, token: UUID) async -> Bool {
+        let result = await observe(sequence: sequence, token: token)
+        return result.success && session?.currentSnapshot != nil
+    }
+
+    private func postconditionSatisfied(
+        _ request: ActivateAndVerifyRequest
+    ) -> Bool {
+        guard let snapshot = session?.currentSnapshot else { return false }
+        let resolution = request.expectedLocator.resolve(in: snapshot)
+        if request.expectedState == .absent {
+            // A different app/window/page is not proof that the target disappeared
+            // from the intended scope. Treat only a scoped not-found result as absence.
+            return resolution.status == .notFound
+        }
+        guard resolution.status == .matched, let element = resolution.selected else {
+            return false
+        }
+        guard let expectedValue = request.expectedValueEquals else { return true }
+        return element.value == expectedValue
+    }
+
+    private func semanticObservationSignature() -> UInt64? {
+        guard let snapshot = session?.currentSnapshot else { return nil }
+        return TakeoverObservationFingerprint(
+            snapshot: snapshot,
+            screenshotPNG: nil
+        ).semanticSignature
+    }
+
+    private func resolvedActivationKey(
+        _ locator: SemanticElementLocator
+    ) -> String? {
+        guard let snapshot = session?.currentSnapshot else { return nil }
+        let resolution = locator.resolve(in: snapshot)
+        guard resolution.status == .matched,
+              let selected = resolution.selected else { return nil }
+
+        let elementsByID = snapshot.elements.reduce(into: [String: SemanticElement]()) {
+            $0[$1.id] = $1
+        }
+        var path: [SemanticElement] = [selected]
+        var parentID = selected.parentID
+        var visited = Set<String>()
+        while let id = parentID,
+              visited.insert(id).inserted,
+              let parent = elementsByID[id] {
+            path.append(parent)
+            parentID = parent.parentID
+        }
+        let scope = [
+            normalizedIdentityText(snapshot.applicationName),
+            normalizedIdentityText(snapshot.windowTitle),
+            normalizedIdentityText(snapshot.pageURL ?? "")
+        ]
+        let semanticPath = path.reversed().map {
+            semanticIdentityDescriptor($0, in: snapshot)
+        }
+        return (scope + semanticPath).joined(separator: "\u{1F}")
+    }
+
+    private func semanticIdentityDescriptor(
+        _ element: SemanticElement,
+        in snapshot: SemanticSnapshot
+    ) -> String {
+        let normalizedLabel = normalizedIdentityText(element.label)
+        let peers = snapshot.elements.filter {
+            $0.parentID == element.parentID
+                && $0.role == element.role
+                && normalizedIdentityText($0.label) == normalizedLabel
+        }.sorted {
+            if $0.frame.y != $1.frame.y { return $0.frame.y < $1.frame.y }
+            return $0.frame.x < $1.frame.x
+        }
+        let ordinal = peers.firstIndex(where: { $0.id == element.id }) ?? 0
+        return "\(element.role.rawValue):\(normalizedLabel):\(ordinal)"
+    }
+
+    private func normalizedIdentityText(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
     }
 
     private func observe(
@@ -290,27 +439,67 @@ public final class TakeoverCoordinator {
                 throw PetFailure.captureFailed
             }
 
+            let progressDecision = session?.progress.recordObservation(
+                snapshot: semantics,
+                screenshotPNG: screenshot
+            )
+                ?? .proceed
+
             session?.currentSnapshot = semantics
             session?.hasScreenshot = screenshot != nil
-            session?.requiresObservation = false
-            session?.observations += 1
             let details = semantics.map(render) ?? "没有可用的语义结构，已返回当前截图。"
-            let duration = format(seconds: Date().timeIntervalSince(startedAt))
+            let duration = String(
+                format: "%.1f 秒",
+                Date().timeIntervalSince(startedAt)
+            )
             trace(
                 .observing,
-                "第 \(session?.observations ?? 1) 次观察完成 · \(duration)",
+                "第 \(session?.progress.observationCount ?? 1) 次观察完成 · \(duration)",
                 kind: .observation,
                 sequence: sequence,
                 details: details
             )
+            switch progressDecision {
+            case .proceed:
+                break
+            case let .warning(warning):
+                trace(
+                    .verifying,
+                    "接管监管提醒",
+                    kind: .outcome,
+                    sequence: sequence,
+                    details: warning
+                )
+            case let .stop(reason):
+                session?.terminalStopReason = reason
+                trace(
+                    .failure,
+                    "接管监管已停止任务",
+                    kind: .outcome,
+                    sequence: sequence,
+                    details: reason
+                )
+                publish(.deciding, reason)
+                return ScreenToolResult(
+                    success: false,
+                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。",
+                    screenshotPNG: screenshot
+                )
+            }
             publish(.deciding, "观察结果已返回 Agent")
 
             let imageNote = screenshot == nil
                 ? "本次没有附带截图，请只使用当前元素 ID 定位。"
                 : "本次同时附带当前截图，可在没有语义元素时使用 0 到 1000 的视觉坐标。"
+            let progressNote: String
+            if case let .warning(warning) = progressDecision {
+                progressNote = "\n监管提醒：\(warning)"
+            } else {
+                progressNote = ""
+            }
             return ScreenToolResult(
                 success: true,
-                message: "当前界面：\n\(details)\n\(imageNote)",
+                message: "当前界面：\n\(details)\n\(imageNote)\(progressNote)",
                 screenshotPNG: screenshot
             )
         } catch is CancellationError {
@@ -318,6 +507,25 @@ public final class TakeoverCoordinator {
         } catch {
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
+            let unavailableDecision = session?.progress.recordObservation(
+                snapshot: nil,
+                screenshotPNG: nil
+            ) ?? .proceed
+            if case let .stop(reason) = unavailableDecision {
+                session?.terminalStopReason = reason
+                trace(
+                    .failure,
+                    "接管监管已停止任务",
+                    kind: .outcome,
+                    sequence: sequence,
+                    details: reason
+                )
+                publish(.deciding, reason)
+                return ScreenToolResult(
+                    success: false,
+                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
+                )
+            }
             trace(
                 .failure,
                 "观察失败",
@@ -325,8 +533,14 @@ public final class TakeoverCoordinator {
                 sequence: sequence,
                 details: message
             )
+            let warning: String
+            if case let .warning(progressWarning) = unavailableDecision {
+                warning = " \(progressWarning)"
+            } else {
+                warning = ""
+            }
             publish(.deciding, "观察失败，原因已返回 Agent")
-            return ScreenToolResult(success: false, message: message)
+            return ScreenToolResult(success: false, message: "\(message)\(warning)")
         }
     }
 
@@ -340,7 +554,7 @@ public final class TakeoverCoordinator {
         }
         let isWait: Bool
         if case .wait = action { isWait = true } else { isWait = false }
-        guard !current.requiresObservation || isWait else {
+        guard current.currentSnapshot != nil || current.hasScreenshot || isWait else {
             return ScreenToolResult(
                 success: false,
                 message: "页面可能已经变化，请先调用 observe 获取当前界面。"
@@ -355,6 +569,25 @@ public final class TakeoverCoordinator {
 
         do {
             try action.validate()
+            let executableAction = try action.resolvingSemanticTargets(
+                in: current.currentSnapshot
+            )
+            let progressDecision = session?.progress.recordAction() ?? .proceed
+            if case let .stop(reason) = progressDecision {
+                session?.terminalStopReason = reason
+                trace(
+                    .failure,
+                    "接管监管已停止任务",
+                    kind: .outcome,
+                    sequence: sequence,
+                    details: reason
+                )
+                publish(.deciding, reason)
+                return ScreenToolResult(
+                    success: false,
+                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
+                )
+            }
             publish(.locating, "Agent 已选择 \(action.label)")
             trace(
                 .acting,
@@ -365,7 +598,7 @@ public final class TakeoverCoordinator {
             )
             publish(.executing, "正在执行 \(action.label)")
             try await executor.execute(
-                action,
+                executableAction,
                 snapshot: current.currentSnapshot,
                 displayID: current.request.displayID
             )
@@ -378,10 +611,8 @@ public final class TakeoverCoordinator {
                 )
             }
             try ensureActive(token)
-            session?.actions += 1
             session?.currentSnapshot = nil
             session?.hasScreenshot = false
-            session?.requiresObservation = true
             trace(
                 .verifying,
                 "\(action.label) 已执行",
@@ -399,7 +630,6 @@ public final class TakeoverCoordinator {
         } catch {
             session?.currentSnapshot = nil
             session?.hasScreenshot = false
-            session?.requiresObservation = true
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
             trace(
@@ -428,7 +658,8 @@ public final class TakeoverCoordinator {
             min(1_000, 20_000 / max(1, snapshot.elements.count))
         )
         let elements = snapshot.elements.map {
-            "\($0.id) 角色=\(roleLabel($0.role)) 名称=\(String(reflecting: $0.label)) 值=\(String(reflecting: bounded($0.value ?? "", limit: valueLimit))) 区域=\($0.frame.x),\($0.frame.y),\($0.frame.width),\($0.frame.height)"
+            let parent = $0.parentID.map(String.init(reflecting:)) ?? "无"
+            return "\($0.id) 父级=\(parent) 角色=\(roleLabel($0.role)) 名称=\(String(reflecting: $0.label)) 值=\(String(reflecting: bounded($0.value ?? "", limit: valueLimit))) 区域=\($0.frame.x),\($0.frame.y),\($0.frame.width),\($0.frame.height)"
         }
         return ([
             header,
@@ -446,6 +677,15 @@ public final class TakeoverCoordinator {
         case .menuItem: "菜单项"
         case .popUpButton: "下拉框"
         case .scrollArea: "滚动区域"
+        case .dialog: "对话框"
+        case .group: "分组"
+        case .list: "列表"
+        case .listItem: "列表项"
+        case .row: "行"
+        case .cell: "单元格"
+        case .tab: "标签页"
+        case .heading: "标题"
+        case .staticText: "静态文本"
         }
     }
 
@@ -556,7 +796,6 @@ public final class TakeoverCoordinator {
                 token: token
             )
             try ensureActive(token)
-            appendConversation("助手：\(answer)")
             publish(.finished, answer)
         } catch {
             handleAnswerError(error, token: token)
@@ -577,20 +816,8 @@ public final class TakeoverCoordinator {
         }
     }
 
-    private func appendConversation(_ entry: String) {
-        conversation.append(String(entry.prefix(8_000)))
-        let turns = answerPreferences?.conversationHistoryTurns ?? 8
-        let entryLimit = max(2, turns * 2)
-        let byteLimit = max(24_000, min(200_000, turns * 16_000))
-        while conversation.count > entryLimit
-            || conversation.reduce(0, { $0 + $1.utf8.count }) > byteLimit {
-            conversation.removeFirst()
-        }
-    }
-
     private func clearAnswerContext() {
         answerPreferences = nil
-        conversation = []
     }
 
     private func publish(
@@ -610,8 +837,8 @@ public final class TakeoverCoordinator {
         let metrics = session.map {
             TakeoverMetrics(
                 durationSeconds: Date().timeIntervalSince($0.startedAt),
-                actionCount: $0.actions,
-                observationCount: $0.observations
+                actionCount: $0.progress.actionCount,
+                observationCount: $0.progress.observationCount
             )
         }
         snapshot = TakeoverSnapshot(
@@ -649,10 +876,6 @@ public final class TakeoverCoordinator {
                 events.removeFirst()
             }
         }
-    }
-
-    private func format(seconds: TimeInterval) -> String {
-        String(format: "%.1f 秒", seconds)
     }
 
     private func compact(_ value: String) -> String {

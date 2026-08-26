@@ -51,13 +51,13 @@ final class AppCoordinator {
         )
         runtimes = LocalAgentRuntimeLocator.detect()
         let packagedSkill = Bundle.main.resourceURL?
-            .appendingPathComponent("Skills/human-exam-taking/SKILL.md")
+            .appendingPathComponent("Skills/jellypet-takeover/SKILL.md")
         let skillURL = packagedSkill.flatMap {
             FileManager.default.isReadableFile(atPath: $0.path) ? $0 : nil
         } ?? Bundle.module.url(
             forResource: "SKILL",
             withExtension: "md",
-            subdirectory: "Skills/human-exam-taking"
+            subdirectory: "Skills/jellypet-takeover"
         )
         let capture = ScreenCaptureService(backend: screenBackend)
         let cleaner = CaptureArtifactCleaner()
@@ -65,7 +65,9 @@ final class AppCoordinator {
         let router = TakeoverSurfaceRouter(
             nativeCapture: capture,
             nativeSemantics: semanticProvider,
-            nativeExecutor: CGEventScreenActionExecutor()
+            nativeExecutor: CGEventScreenActionExecutor(
+                semanticProvider: semanticProvider
+            )
         )
         surfaceRouter = router
         takeover = TakeoverCoordinator(
@@ -173,7 +175,7 @@ final class AppCoordinator {
                 }
             }
         }
-        bubble.onModeChange = { [weak self] takeoverEnabled, text in
+        bubble.onTakeoverToggle = { [weak self] takeoverEnabled, text in
             self?.changeMode(takeoverEnabled, preserving: text)
         }
         bubble.onClose = { [weak self] in
@@ -200,9 +202,6 @@ final class AppCoordinator {
                     self.preferencesStore.answerHistory = self.answerHistory
                 }
                 self.refreshCurrentSettings()
-            case let .takeover(value):
-                self.preferencesStore.takeoverEnabled = value
-                self.updateMenu()
             case let .activityDetails(value): self.preferencesStore.showActivityDetails = value
             case let .shortcut(value): self.changeShortcut(value)
             case let .answerScrollShortcut(value):
@@ -277,6 +276,7 @@ final class AppCoordinator {
             bubble.showWorking(
                 previousMessage: preparationMessage,
                 preferences: preferencesStore.assistantPreferences,
+                takeoverEnabled: true,
                 petFrame: pet.panel.frame,
                 screen: pet.panel.screen
             )
@@ -417,6 +417,7 @@ final class AppCoordinator {
             bubble.showWorking(
                 previousMessage: snapshot.message ?? lastMessage,
                 preferences: preferences,
+                takeoverEnabled: false,
                 petFrame: pet.panel.frame,
                 screen: pet.panel.screen
             )
@@ -549,7 +550,16 @@ final class AppCoordinator {
         _ takeoverEnabled: Bool,
         preserving text: String
     ) {
-        guard !takeover.snapshot.isActive else { return }
+        if takeover.snapshot.isActive {
+            guard !takeoverEnabled, activeTakeoverRequest != nil else {
+                return
+            }
+            preferencesStore.takeoverEnabled = false
+            updateMenu()
+            cancelTakeover(message: "已关闭接管")
+            showComposer(initialText: text)
+            return
+        }
         preferencesStore.takeoverEnabled = takeoverEnabled
         updateMenu()
         showComposer(initialText: text)
@@ -704,6 +714,7 @@ final class AppCoordinator {
         bubble.showError(
             message ?? failure.localizedDescription,
             preferences: preferences,
+            takeoverEnabled: preferencesStore.takeoverEnabled,
             petFrame: pet.panel.frame,
             screen: pet.panel.screen
         )
@@ -803,7 +814,6 @@ final class AppCoordinator {
                 displays: displays,
                 selectedDisplayID: preferencesStore.selectedDisplayID,
                 assistantPreferences: preferencesStore.assistantPreferences,
-                takeoverEnabled: preferencesStore.takeoverEnabled,
                 showActivityDetails: preferencesStore.showActivityDetails,
                 globalShortcut: preferencesStore.globalShortcut,
                 answerScrollShortcut:

@@ -9,7 +9,7 @@ public enum ScreenKey: String, Codable, CaseIterable, Equatable, Hashable, Senda
     case left, right, up, down, space, home, end, pageUp, pageDown
 }
 
-public enum KeyModifier: String, Codable, Hashable, Sendable {
+public enum KeyModifier: String, Codable, CaseIterable, Hashable, Sendable {
     case command, control, option, shift
 }
 
@@ -53,7 +53,21 @@ public enum ScreenAction: Equatable, Sendable {
         case let .keyPress(_, modifiers):
             guard Set(modifiers).count == modifiers.count else { throw PetFailure.invalidScreenAction }
         case let .navigate(url):
-            guard NavigationURLPolicy.normalized(url) != nil else { throw PetFailure.invalidScreenAction }
+            let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard url == trimmed,
+                  !url.isEmpty,
+                  url.count <= 2_048,
+                  url.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }),
+                  let parts = URLComponents(string: url),
+                  let scheme = parts.scheme?.lowercased(),
+                  ["http", "https"].contains(scheme),
+                  parts.host?.isEmpty == false,
+                  parts.user == nil,
+                  parts.password == nil else {
+                throw PetFailure.invalidScreenAction
+            }
         case let .scroll(target, deltaX, deltaY):
             try target?.validate()
             guard deltaX != 0 || deltaY != 0,
@@ -79,6 +93,8 @@ private extension ScreenActionTarget {
             guard (0...1_000).contains(x), (0...1_000).contains(y) else { throw PetFailure.invalidScreenAction }
         case let .element(elementID):
             guard !elementID.isEmpty else { throw PetFailure.invalidScreenAction }
+        case .locator:
+            break
         }
     }
 }
@@ -245,6 +261,33 @@ public struct TakeoverSnapshot: Equatable, Sendable {
 }
 
 extension ScreenAction {
+    /// Resolves stable locator recipes against one current observation. The returned action
+    /// contains only observation-scoped element IDs and must not be reused after the UI changes.
+    public func resolvingSemanticTargets(
+        in snapshot: SemanticSnapshot?
+    ) throws -> ScreenAction {
+        switch self {
+        case let .click(target):
+            return .click(try target.resolved(in: snapshot))
+        case let .doubleClick(target):
+            return .doubleClick(try target.resolved(in: snapshot))
+        case let .typeText(target, text, replaces):
+            return .typeText(
+                target: try target.resolved(in: snapshot),
+                text: text,
+                replacesExistingText: replaces
+            )
+        case let .scroll(target, deltaX, deltaY):
+            return .scroll(
+                target: try target?.resolved(in: snapshot),
+                deltaX: deltaX,
+                deltaY: deltaY
+            )
+        case .drag, .keyPress, .navigate, .wait:
+            return self
+        }
+    }
+
     public var label: String {
         guard case let .scroll(_, deltaX, deltaY) = self else { return kind.rawValue }
         if abs(deltaY) >= abs(deltaX) { return "scroll\(deltaY < 0 ? "↓" : "↑")(\(abs(deltaY))px)" }
@@ -267,6 +310,19 @@ extension ScreenAction {
 }
 
 private extension ScreenActionTarget {
+    func resolved(in snapshot: SemanticSnapshot?) throws -> ScreenActionTarget {
+        guard case let .locator(locator) = self else { return self }
+        guard let snapshot else {
+            throw PetFailure.semanticLocatorFailed("当前观察没有语义元素。")
+        }
+        let resolution = locator.resolve(in: snapshot)
+        guard resolution.status == .matched,
+              let selected = resolution.selected else {
+            throw PetFailure.semanticLocatorFailed(resolution.message)
+        }
+        return .element(elementID: selected.id)
+    }
+
     var isVisual: Bool {
         if case .visual = self { return true }
         return false

@@ -36,8 +36,8 @@ install -m 644 \
 install -m 644 \
   "$resource_bundle/JellyPetConfig.json" \
   "$contents/Resources/JellyPetConfig.json"
-skill_source="$resource_bundle/Skills/human-exam-taking/SKILL.md"
-skill_target="$contents/Resources/Skills/human-exam-taking"
+skill_source="$resource_bundle/Skills/jellypet-takeover/SKILL.md"
+skill_target="$contents/Resources/Skills/jellypet-takeover"
 test -f "$skill_source"
 mkdir -p "$skill_target"
 install -m 644 "$skill_source" "$skill_target/SKILL.md"

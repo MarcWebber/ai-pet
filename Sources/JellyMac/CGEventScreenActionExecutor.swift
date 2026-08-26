@@ -6,11 +6,14 @@ import JellyCore
 
 @MainActor
 public final class CGEventScreenActionExecutor: ScreenActionExecuting {
+    private let semanticProvider: BrowserAccessibilityContextProvider
     private let source = CGEventSource(stateID: .privateState)
     private let mouseLock = NSLock()
     private var activeMouseUpPoint: CGPoint?
 
-    public init() {}
+    public init(semanticProvider: BrowserAccessibilityContextProvider) {
+        self.semanticProvider = semanticProvider
+    }
 
     public func execute(
         _ action: ScreenAction,
@@ -21,8 +24,11 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         let bounds = try onlineBounds(displayID)
         switch action {
         case let .click(target):
+            if try performSemanticActivation(target, snapshot: snapshot) { return }
             try click(at: coordinate(target, snapshot, in: bounds), count: 1)
         case let .doubleClick(target):
+            // AXPress is a semantic activation, not one half of a double click. Repeating it
+            // can submit a button twice, so preserve true double-click pointer semantics here.
             try click(at: coordinate(target, snapshot, in: bounds), count: 2)
         case let .drag(fromX, fromY, toX, toY, duration):
             try await drag(
@@ -31,6 +37,9 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 duration: duration
             )
         case let .typeText(target, text, replaces):
+            if try setSemanticValue(target, text: text, replaces: replaces, snapshot: snapshot) {
+                return
+            }
             let point = try coordinate(target, snapshot, in: bounds)
             try click(at: point, count: 1); try await pause(120)
             try click(at: point, count: 1); try await pause(120)
@@ -59,6 +68,70 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
 
     public func cancel() { releaseMouseIfNeeded() }
 
+    private func nativeElement(
+        _ target: ScreenActionTarget,
+        snapshot: SemanticSnapshot?
+    ) throws -> AXUIElement? {
+        guard case let .element(elementID) = target else { return nil }
+        guard snapshot?.elements.contains(where: {
+            $0.id == elementID && $0.isEnabled
+        }) == true else {
+            throw PetFailure.semanticTargetUnavailable
+        }
+        let element = semanticProvider.nativeElement(for: elementID)
+        // Native IDs carry their observation generation. Never turn an expired native
+        // handle back into a coordinate click from an old snapshot.
+        if element == nil, elementID.hasPrefix("ax-") {
+            throw PetFailure.semanticTargetUnavailable
+        }
+        return element
+    }
+
+    private func performSemanticActivation(
+        _ target: ScreenActionTarget,
+        snapshot: SemanticSnapshot?
+    ) throws -> Bool {
+        guard let element = try nativeElement(target, snapshot: snapshot) else { return false }
+        guard let actions = axActions(element) else { return false }
+        for action in [kAXPressAction, kAXConfirmAction] where actions.contains(action as String) {
+            if AXUIElementPerformAction(element, action as CFString) == .success { return true }
+        }
+        return false
+    }
+
+    private func setSemanticValue(
+        _ target: ScreenActionTarget,
+        text: String,
+        replaces: Bool,
+        snapshot: SemanticSnapshot?
+    ) throws -> Bool {
+        guard let element = try nativeElement(target, snapshot: snapshot) else { return false }
+        var settable = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &settable
+        ) == .success, settable.boolValue else { return false }
+
+        var value = text
+        if !replaces {
+            var current: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                element, kAXValueAttribute as CFString, &current
+            ) == .success, let current = current as? String {
+                value = current + text
+            }
+        }
+        guard AXUIElementSetAttributeValue(
+            element, kAXValueAttribute as CFString, value as CFTypeRef
+        ) == .success else { return false }
+        return true
+    }
+
+    private func axActions(_ element: AXUIElement) -> [String]? {
+        var names: CFArray?
+        guard AXUIElementCopyActionNames(element, &names) == .success else { return nil }
+        return names as? [String]
+    }
+
     private func coordinate(
         _ target: ScreenActionTarget,
         _ snapshot: SemanticSnapshot?,
@@ -78,6 +151,10 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 element.frame.centerY,
                 in: bounds
             )
+        case .locator:
+            // Stable locators are resolved by TakeoverCoordinator against the current
+            // observation before reaching a platform executor.
+            throw PetFailure.semanticTargetUnavailable
         }
     }
 

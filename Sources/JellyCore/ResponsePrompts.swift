@@ -26,16 +26,14 @@ public enum ResponsePrompts {
     }
 
     public static func followUp(
-        context: String,
         question: String,
         customInstructions: String
     ) -> String {
         """
-        你是 JellyPet。下面只有上一轮文字上下文，没有新截图。使用简体中文直接回答。
+        你是 JellyPet。本轮没有新截图，请基于当前对话上下文使用简体中文直接回答。
         \(instructions(customInstructions))
         \(voice)
         编程题给完整可运行代码，不展示隐藏推理。
-        \(context)
         用户最新问题：\(question)
         """
     }

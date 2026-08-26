@@ -39,7 +39,7 @@ private final class CodexStderrBuffer: @unchecked Sendable {
 actor CodexAppServerClient {
     typealias UpdateHandler = @Sendable (String) -> Void
 
-    private static let skillName = "human-exam-taking"
+    private static let skillName = "jellypet-takeover"
 
     private enum TurnOutcome {
         case waiting
@@ -706,6 +706,22 @@ actor CodexAppServerClient {
             }
             return .observe
         }
+        if tool == "activate_and_verify" {
+            let keys = Set(arguments.keys)
+            guard Set(["targetLocator", "expectedLocator", "expectedState"])
+                .isSubset(of: keys),
+                  keys.isSubset(of: [
+                      "targetLocator", "expectedLocator", "expectedState",
+                      "expectedValueEquals"
+                  ]) else {
+                throw CodexAppServerError.invalidResponse
+            }
+            let data = try JSONSerialization.data(withJSONObject: arguments)
+            return .activateAndVerify(try JSONDecoder().decode(
+                ActivateAndVerifyRequest.self,
+                from: data
+            ))
+        }
         let specification: (
             kind: String,
             required: Set<String>,
@@ -778,6 +794,10 @@ actor CodexAppServerClient {
             value["source"] = "element"
             return value
         }
+        if keys == ["locator"], target["locator"] is [String: Any] {
+            value["source"] = "locator"
+            return value
+        }
         if keys == ["x", "y"] {
             value["source"] = "visual"
             return value
@@ -816,7 +836,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "click",
-                "单击当前观察中的元素或视觉坐标。",
+                "单击可逆的导航或选择目标；发送、提交、购买、删除必须改用 activate_and_verify。支持当前元素、稳定语义 locator 或视觉坐标。",
                 schema(
                     properties: ["target": targetSchema],
                     required: ["target"]
@@ -824,7 +844,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "double_click",
-                "双击当前观察中的元素或视觉坐标。",
+                "双击可逆目标；不得用于发送、提交、购买或删除。支持当前元素、稳定语义 locator 或视觉坐标。",
                 schema(
                     properties: ["target": targetSchema],
                     required: ["target"]
@@ -850,7 +870,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "点击输入目标并一次性输入完整文本。编程题代码应一次性输入，不要故意逐字伪装人工。",
+                "定位输入目标并一次性填写完整文本；优先使用稳定 locator。编程题代码应一次性输入，不要故意逐字伪装人工。",
                 schema(
                     properties: [
                         "target": targetSchema,
@@ -858,6 +878,26 @@ actor CodexAppServerClient {
                         "replace": ["type": "boolean"]
                     ],
                     required: ["target", "text", "replace"]
+                )
+            ),
+            tool(
+                "activate_and_verify",
+                "在最新观察中重新解析并激活目标一次，然后重新观察并验证预期元素存在、消失或具有指定值；校验失败也不会重复激活。",
+                schema(
+                    properties: [
+                        "targetLocator": locatorSchema,
+                        "expectedLocator": locatorSchema,
+                        "expectedState": [
+                            "type": "string",
+                            "enum": SemanticConditionState.allCases.map(\.rawValue)
+                        ],
+                        "expectedValueEquals": [
+                            "type": "string", "maxLength": 100_000
+                        ]
+                    ],
+                    required: [
+                        "targetLocator", "expectedLocator", "expectedState"
+                    ]
                 )
             ),
             tool(
@@ -873,7 +913,7 @@ actor CodexAppServerClient {
                             "type": "array",
                             "items": [
                                 "type": "string",
-                                "enum": ["command", "control", "option", "shift"]
+                                "enum": KeyModifier.allCases.map(\.rawValue)
                             ],
                             "uniqueItems": true
                         ]
@@ -893,7 +933,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "scroll",
-                "滚动当前页面或指定元素。负的 deltaY 向下，正的 deltaY 向上；单次绝对值不超过 \(ScreenAction.maximumScrollDelta)。",
+                "滚动当前页面、当前元素或稳定 locator 指向的容器。负的 deltaY 向下，正的 deltaY 向上；单次绝对值不超过 \(ScreenAction.maximumScrollDelta)。",
                 schema(
                     properties: [
                         "target": targetSchema,
@@ -943,8 +983,45 @@ actor CodexAppServerClient {
             schema(
                 properties: ["x": coordinateSchema, "y": coordinateSchema],
                 required: ["x", "y"]
+            ),
+            schema(
+                properties: ["locator": locatorSchema],
+                required: ["locator"]
             )
         ]
+    ]
+
+    private static let textMatcherSchema: [String: Any] = schema(
+        properties: [
+            "text": ["type": "string", "minLength": 1, "maxLength": 1_000],
+            "mode": [
+                "type": "string",
+                "enum": SemanticTextMatcher.Mode.allCases.map(\.rawValue)
+            ]
+        ],
+        required: ["text"]
+    )
+
+    private static let locatorSchema: [String: Any] = schema(
+        properties: [
+            "application": textMatcherSchema,
+            "window": textMatcherSchema,
+            "pageURL": textMatcherSchema,
+            "role": semanticRoleSchema,
+            "label": textMatcherSchema,
+            "value": textMatcherSchema,
+            "ancestorRole": semanticRoleSchema,
+            "ancestorLabel": textMatcherSchema,
+            "ancestorValue": textMatcherSchema,
+            "ordinal": ["type": "integer", "minimum": 0, "maximum": 249],
+            "requiresEnabled": ["type": "boolean"]
+        ],
+        required: []
+    )
+
+    private static let semanticRoleSchema: [String: Any] = [
+        "type": "string",
+        "enum": SemanticElementRole.allCases.map(\.rawValue)
     ]
 
     private static func tool(

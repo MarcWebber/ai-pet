@@ -5,7 +5,6 @@ struct SettingsViewState {
     let displays: [DisplayDescriptor]
     let selectedDisplayID: UInt32?
     let assistantPreferences: AssistantPreferences
-    let takeoverEnabled: Bool
     let showActivityDetails: Bool
     let globalShortcut: GlobalShortcut
     let answerScrollShortcut: AnswerScrollShortcut

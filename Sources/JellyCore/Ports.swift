@@ -44,6 +44,30 @@ public struct CodexRequest: Equatable, Sendable {
 public enum ScreenToolCall: Equatable, Sendable {
     case observe
     case perform(ScreenAction)
+    case activateAndVerify(ActivateAndVerifyRequest)
+}
+
+public enum SemanticConditionState: String, Codable, CaseIterable, Equatable, Sendable {
+    case present, absent
+}
+
+public struct ActivateAndVerifyRequest: Codable, Equatable, Sendable {
+    public let targetLocator: SemanticElementLocator
+    public let expectedLocator: SemanticElementLocator
+    public let expectedState: SemanticConditionState
+    public let expectedValueEquals: String?
+
+    public init(
+        targetLocator: SemanticElementLocator,
+        expectedLocator: SemanticElementLocator,
+        expectedState: SemanticConditionState = .present,
+        expectedValueEquals: String? = nil
+    ) {
+        self.targetLocator = targetLocator
+        self.expectedLocator = expectedLocator
+        self.expectedState = expectedState
+        self.expectedValueEquals = expectedValueEquals
+    }
 }
 
 public struct ScreenToolResult: Equatable, Sendable {

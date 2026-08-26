@@ -18,11 +18,6 @@ public enum PlaywrightBrowserChannel: String, Equatable, Sendable {
 public enum PlaywrightBrowserPreparation: Equatable, Sendable {
     case attached
     case unavailable(String)
-
-    public var usesPlaywright: Bool {
-        if case .attached = self { return true }
-        return false
-    }
 }
 
 public enum PlaywrightSnapshotParser {
@@ -32,8 +27,24 @@ public enum PlaywrightSnapshotParser {
         viewportWidth: Int = 1_280,
         viewportHeight: Int = 900
     ) -> SemanticSnapshot? {
-        let elements = yaml.split(whereSeparator: \.isNewline).compactMap {
-            element(String($0), width: viewportWidth, height: viewportHeight)
+        var elements: [SemanticElement] = []
+        var ancestors: [(indent: Int, id: String)] = []
+        for sourceLine in yaml.split(whereSeparator: \.isNewline) {
+            let line = String(sourceLine)
+            let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) {
+                $0 + ($1 == "\t" ? 2 : 1)
+            }
+            while ancestors.last.map({ $0.indent >= indent }) == true {
+                ancestors.removeLast()
+            }
+            guard let semantic = element(
+                line,
+                parentID: ancestors.last?.id,
+                width: viewportWidth,
+                height: viewportHeight
+            ) else { continue }
+            elements.append(semantic)
+            ancestors.append((indent, semantic.id))
         }
         let url = pageValue("Page URL", commandOutput)
         let title = pageValue("Page Title", commandOutput) ?? ""
@@ -45,7 +56,12 @@ public enum PlaywrightSnapshotParser {
         )
     }
 
-    private static func element(_ line: String, width: Int, height: Int) -> SemanticElement? {
+    private static func element(
+        _ line: String,
+        parentID: String?,
+        width: Int,
+        height: Int
+    ) -> SemanticElement? {
         guard let ref = attribute("ref", line),
               let box = attribute("box", line)?.split(separator: ",").compactMap({
                   Double($0).map { Int($0.rounded()) }
@@ -59,7 +75,11 @@ public enum PlaywrightSnapshotParser {
             "searchbox": .textField, "spinbutton": .textField,
             "checkbox": .checkBox, "radio": .radioButton,
             "menuitem": .menuItem, "combobox": .popUpButton,
-            "scrollbar": .scrollArea
+            "scrollbar": .scrollArea, "dialog": .dialog,
+            "group": .group, "list": .list, "listitem": .listItem,
+            "row": .row, "cell": .cell, "gridcell": .cell,
+            "tab": .tab, "heading": .heading,
+            "text": .staticText, "paragraph": .staticText
         ]
         guard let name, let role = roles[name], width > 0, height > 0 else { return nil }
         let left = min(width, max(0, box[0])), top = min(height, max(0, box[1]))
@@ -73,7 +93,8 @@ public enum PlaywrightSnapshotParser {
             }
         }
         return SemanticElement(
-            id: ref, role: role, label: quote ?? role.rawValue,
+            id: ref, parentID: parentID,
+            role: role, label: quote ?? role.rawValue,
             value: value(line, role: role),
             frame: SemanticRect(
                 x: x, y: y, width: max(1, right * 1_000 / width - x),
@@ -227,6 +248,7 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
     }
 
     public func execute(_ action: ScreenAction, snapshot: SemanticSnapshot?, displayID _: UInt32) async throws {
+        try action.validate()
         try await perform(action, snapshot)
     }
 
@@ -333,7 +355,6 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
             _ = try await code("await page.mouse.move(\(from.x), \(from.y)); await page.mouse.down(); await page.mouse.move(\(to.x), \(to.y), { steps: \(max(12, min(60, duration / 16))) }); await page.mouse.up();")
         case let .keyPress(key, modifiers): _ = try await command(["press", keyName(key, modifiers)])
         case let .navigate(url):
-            guard let url = NavigationURLPolicy.normalized(url) else { throw PetFailure.invalidScreenAction }
             _ = try await command(["goto", url], timeout: 60)
         case let .scroll(target, deltaX, deltaY):
             if let target {
@@ -447,7 +468,7 @@ public final class TakeoverSurfaceRouter: CaptureService, SemanticContextProvidi
         let preparation = try await playwright.prepare(
             attachingTo: channel
         )
-        if preparation.usesPlaywright { route = .playwright }
+        if case .attached = preparation { route = .playwright }
         return preparation
     }
     public func capture(displayID: UInt32) async throws -> CaptureArtifact {

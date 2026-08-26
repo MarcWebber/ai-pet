@@ -34,6 +34,13 @@ private enum JellyPetMain {
             exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
         }
 
+        if CommandLine.arguments.contains("--verify-main-bubble-layout") {
+            _ = NSApplication.shared
+            let result = VisualVerifier.verifyMainBubbleLayout()
+            print(result.message)
+            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
+        }
+
         if let index = CommandLine.arguments.firstIndex(
             of: "--render-settings-preview"
         ), CommandLine.arguments.indices.contains(index + 1) {

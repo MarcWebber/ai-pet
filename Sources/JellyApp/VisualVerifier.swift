@@ -82,6 +82,17 @@ enum VisualVerifier {
         )
     }
 
+    static func verifyMainBubbleLayout() -> Result {
+        let bubble = BubblePanelController()
+        let verification = bubble.verifyTakeoverToggleLayout()
+        return Result(
+            passed: verification.passed,
+            message: verification.passed
+                ? "Main bubble layout verification passed: \(verification.message)."
+                : "Main bubble layout verification failed: \(verification.message)."
+        )
+    }
+
     static func renderSettingsPreview(to url: URL) -> Result {
         let form = SettingsFormView(
             frame: NSRect(x: 0, y: 0, width: 700, height: 1_400)
@@ -128,7 +139,6 @@ enum VisualVerifier {
             ],
             selectedDisplayID: 1,
             assistantPreferences: AssistantPreferences.default,
-            takeoverEnabled: true,
             showActivityDetails: true,
             globalShortcut: .controlOptionSpace,
             answerScrollShortcut: .controlOptionArrows,

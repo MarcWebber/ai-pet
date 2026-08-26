@@ -1,8 +1,11 @@
 import Foundation
 
-public enum SemanticElementRole: String, Equatable, Sendable {
+public enum SemanticElementRole: String, Codable, CaseIterable, Equatable, Sendable {
     case button, link, textField, checkBox, radioButton
     case menuItem, popUpButton, scrollArea
+    /// Read-only structure roles. These make stable ancestor locators possible
+    /// without turning every accessibility node into model-facing noise.
+    case dialog, group, list, listItem, row, cell, tab, heading, staticText
 }
 
 public struct SemanticRect: Equatable, Sendable {
@@ -20,6 +23,9 @@ public struct SemanticRect: Equatable, Sendable {
 
 public struct SemanticElement: Equatable, Sendable {
     public let id: String
+    /// An observation-scoped relationship. Both this ID and `id` are invalid
+    /// once the UI is observed again.
+    public let parentID: String?
     public let role: SemanticElementRole
     public let label: String
     public let value: String?
@@ -27,13 +33,15 @@ public struct SemanticElement: Equatable, Sendable {
     public let isEnabled: Bool
     public init(
         id: String,
+        parentID: String? = nil,
         role: SemanticElementRole,
         label: String,
         value: String? = nil,
         frame: SemanticRect,
         isEnabled: Bool
     ) {
-        self.id = id; self.role = role; self.label = label
+        self.id = id; self.parentID = parentID
+        self.role = role; self.label = label
         self.value = value; self.frame = frame; self.isEnabled = isEnabled
     }
 }
@@ -55,15 +63,17 @@ public struct SemanticSnapshot: Equatable, Sendable {
     }
 }
 
-private enum TargetSource: String, Codable { case element, visual }
+private enum TargetSource: String, Codable { case element, locator, visual }
 
 public enum ScreenActionTarget: Equatable, Sendable {
     case element(elementID: String)
+    /// A stable recipe resolved against the latest observation immediately before execution.
+    case locator(SemanticElementLocator)
     case visual(x: Int, y: Int)
 }
 
 extension ScreenActionTarget: Codable {
-    private enum Key: String, CodingKey { case source, elementID, x, y }
+    private enum Key: String, CodingKey { case source, elementID, locator, x, y }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: Key.self)
@@ -77,6 +87,10 @@ extension ScreenActionTarget: Codable {
             self = .element(
                 elementID: try values.decode(String.self, forKey: .elementID)
             )
+        case .locator:
+            self = .locator(
+                try values.decode(SemanticElementLocator.self, forKey: .locator)
+            )
         }
     }
 
@@ -89,6 +103,9 @@ extension ScreenActionTarget: Codable {
         case let .element(elementID):
             try values.encode(TargetSource.element, forKey: .source)
             try values.encode(elementID, forKey: .elementID)
+        case let .locator(locator):
+            try values.encode(TargetSource.locator, forKey: .source)
+            try values.encode(locator, forKey: .locator)
         }
     }
 }

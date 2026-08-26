@@ -4,8 +4,6 @@ public enum PetFailure: Error, Equatable, Sendable {
     case selectedDisplayUnavailable
     case noDisplaysAvailable
     case captureFailed
-    case codexUnavailable
-    case codexFailed(String)
     case agentRuntimeUnavailable(String)
     case agentRuntimeFailed(String, String)
     case invalidCodexOutput
@@ -14,6 +12,7 @@ public enum PetFailure: Error, Equatable, Sendable {
     case answerHistoryShortcutUnavailable
     case invalidScreenAction
     case semanticTargetUnavailable
+    case semanticLocatorFailed(String)
     case screenActionFailed
 }
 
@@ -26,10 +25,6 @@ extension PetFailure: LocalizedError {
             return "当前没有可捕获的屏幕。"
         case .captureFailed:
             return "无法捕获所选屏幕，请稍后重试。"
-        case .codexUnavailable:
-            return "Codex CLI 未找到或无法启动，请在设置中检查 CLI 路径。"
-        case let .codexFailed(message):
-            return "Codex 运行失败：\(message)"
         case let .agentRuntimeUnavailable(runtime):
             return "没有找到 \(runtime) 的本地 CLI，请在设置中选择已探测到的 Runtime。"
         case let .agentRuntimeFailed(runtime, message):
@@ -46,6 +41,8 @@ extension PetFailure: LocalizedError {
             return "Agent 返回的鼠标或键盘参数无效。"
         case .semanticTargetUnavailable:
             return "AI 连续引用了当前页面快照中不存在的元素，接管已停止。"
+        case let .semanticLocatorFailed(message):
+            return "无法在当前界面唯一定位目标元素：\(message)"
         case .screenActionFailed:
             return "无法执行鼠标或键盘动作，接管已停止。"
         }

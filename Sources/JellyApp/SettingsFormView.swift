@@ -6,7 +6,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     enum Action {
         case display(UInt32)
         case assistant(AssistantPreferences)
-        case takeover(Bool)
         case activityDetails(Bool)
         case shortcut(GlobalShortcut)
         case answerScrollShortcut(AnswerScrollShortcut)
@@ -31,7 +30,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let effort = NSPopUpButton()
     private let historyField = NSTextField()
     private let historyStepper = NSStepper()
-    private let takeover = NSSwitch()
     private let activityDetails = NSSwitch()
     private let custom = NSTextView()
     private let customScroll = NSScrollView()
@@ -126,7 +124,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     func render(_ state: SettingsViewState) {
         assistant = state.assistantPreferences
         title.stringValue = "果冻的小窝"
-        subtitle.stringValue = "工作模式、模型和外形，都可以在这里慢慢调整"
+        subtitle.stringValue = "模型、外形和快捷键，都可以在这里慢慢调整"
         renderDisplays(state)
         renderRuntimes(state)
         renderModels(state)
@@ -134,7 +132,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         select(state.globalShortcut.rawValue, in: shortcut)
         select(state.answerScrollShortcut.rawValue, in: answerScrollShortcut)
         select(state.answerHistoryShortcut.rawValue, in: answerHistoryShortcut)
-        takeover.state = state.takeoverEnabled ? .on : .off
         activityDetails.state = state.showActivityDetails ? .on : .off
         if historyField.currentEditor() == nil {
             historyField.integerValue = state.assistantPreferences
@@ -224,7 +221,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             action: #selector(answerHistoryShortcutChanged)
         )
         answerHistoryShortcut.toolTip = "左箭头查看上一次回答，右箭头返回下一次回答。"
-        configure(takeover, action: #selector(takeoverChanged))
         configure(activityDetails, action: #selector(activityDetailsChanged))
 
         custom.delegate = self
@@ -331,19 +327,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             .horizontal,
             7
         )
-        let betaTitle = stack([
-            label("默认进入屏幕接管", color: .labelColor, weight: .bold),
-            pill("BETA", color: .systemOrange)
-        ], .horizontal, 7)
-        let betaDescription = stack([
-            betaTitle,
-            label("打开聊天时优先选择接管，两个模式仍可随时切换。")
-        ], .vertical, 4)
-        let betaBlock = stack([
-            betaDescription,
-            NSView(),
-            takeover
-        ], .horizontal, 8)
         let activityBlock = stack([
             label("显示观察、工具调用、回复和操作结果"),
             NSView(),
@@ -398,12 +381,11 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             ]
         )
         let controlsCard = sectionCard(
-            title: "模式与快捷键",
-            symbolName: "sparkles",
-            subtitle: "设置默认模式，以及不移动鼠标也能使用的快捷操作。",
+            title: "显示与快捷键",
+            symbolName: "keyboard.fill",
+            subtitle: "调整过程详情，以及不移动鼠标也能使用的快捷操作。",
             tint: .systemOrange,
             rows: [
-                row("默认模式", betaBlock),
                 row("过程详情", activityBlock),
                 row("唤醒 / 停止", shortcut),
                 row("滚动回答", answerScrollShortcut),
@@ -523,19 +505,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let field = NSTextField(labelWithString: value)
         field.font = roundedFont(ofSize: size, weight: weight)
         field.textColor = color
-        return field
-    }
-
-    private func pill(_ value: String, color: NSColor) -> NSTextField {
-        let field = label(value, color: color, weight: .bold, size: 9)
-        field.alignment = .center
-        field.wantsLayer = true
-        field.layer?.cornerRadius = 8
-        field.layer?.backgroundColor = color.withAlphaComponent(0.14).cgColor
-        field.layer?.borderWidth = 1
-        field.layer?.borderColor = color.withAlphaComponent(0.30).cgColor
-        field.widthAnchor.constraint(equalToConstant: 42).isActive = true
-        field.heightAnchor.constraint(equalToConstant: 18).isActive = true
         return field
     }
 
@@ -727,10 +696,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     @objc private func historyStepperChanged() {
         historyField.integerValue = historyStepper.integerValue
         publishAssistant(historyTurns: historyStepper.integerValue)
-    }
-
-    @objc private func takeoverChanged() {
-        onAction?(.takeover(takeover.state == .on))
     }
 
     @objc private func activityDetailsChanged() {

@@ -2,7 +2,7 @@ import Foundation
 import JellyCore
 import JellyMac
 
-private func check(_ condition: @autoclosure () -> Bool, _ message: String) {
+func check(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else {
         fputs("FAILED: \(message)\n", stderr)
         exit(EXIT_FAILURE)
@@ -60,6 +60,11 @@ private final class StubExecutor: ScreenActionExecuting {
 private enum JellyBehaviorChecksMain {
     @MainActor
     static func main() async throws {
+        try runElementLocatorChecks()
+        runSemanticHierarchyChecks()
+        runTakeoverProgressMonitorChecks()
+        await runActionGroupToolChecks()
+
         check(
             BrowserSemanticPolicy.isCodeEditorCandidate(
                 role: "AXGroup",
@@ -118,13 +123,19 @@ private enum JellyBehaviorChecksMain {
             "unsupported browsers must use the native route"
         )
 
+        var validNavigation = true
+        do {
+            try ScreenAction.navigate(url: "https://example.com/path").validate()
+        } catch { validNavigation = false }
+        check(validNavigation, "ordinary HTTPS navigation must remain available")
+        var credentialNavigationRejected = false
+        do {
+            try ScreenAction.navigate(
+                url: "https://user:secret@example.com"
+            ).validate()
+        } catch { credentialNavigationRejected = true }
         check(
-            NavigationURLPolicy.normalized("https://example.com/path")
-                == "https://example.com/path",
-            "ordinary HTTPS navigation must remain available"
-        )
-        check(
-            NavigationURLPolicy.normalized("https://user:secret@example.com") == nil,
+            credentialNavigationRejected,
             "URLs containing credentials must be rejected"
         )
 
@@ -138,11 +149,6 @@ private enum JellyBehaviorChecksMain {
             invalidAction == nil,
             "out-of-range tool arguments must be rejected before execution"
         )
-        check(
-            !PlaywrightBrowserPreparation.unavailable("未配置连接").usesPlaywright,
-            "an unavailable Playwright route must be explicit"
-        )
-
         check(
             AssistantPreferences.default.runtime == .automatic
                 && AssistantPreferences.default.model
@@ -393,7 +399,7 @@ private enum JellyBehaviorChecksMain {
             }
             let skillURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent(
-                    "Sources/JellyApp/Resources/Skills/human-exam-taking/SKILL.md"
+                    "Sources/JellyApp/Resources/Skills/jellypet-takeover/SKILL.md"
                 )
             let liveResponder = LocalAgentResponder(
                 runtimes: [runtime],

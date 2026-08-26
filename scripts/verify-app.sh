@@ -18,7 +18,7 @@ jq -e '
   and .assistant.reasoningEffort == "high"
   and .beta.screenTakeover == true
 ' "$app/Contents/Resources/JellyPetConfig.json" >/dev/null
-test -f "$app/Contents/Resources/Skills/human-exam-taking/SKILL.md"
+test -f "$app/Contents/Resources/Skills/jellypet-takeover/SKILL.md"
 test -f "$app/Contents/Resources/AppIcon.icns"
 test -f "$app/Contents/Resources/Sounds/capture.wav"
 test -f "$app/Contents/Resources/Sounds/thinking.wav"
