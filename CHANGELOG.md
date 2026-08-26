@@ -1,5 +1,38 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- 新增稳定语义 locator，可按应用、窗口、页面网址、角色、名称、值、祖先和序号在最新
+  观察中重新定位元素。
+- 新增单次激活并验证动作，用于约束发送、提交、购买和删除等外部副作用。
+- 新增语义与视觉联合的进展监管，在动作预算耗尽、连续无变化或连续无法观察时停止接管。
+- 新增主聊天气泡布局验证，并把行为检查按定位、层级、单次激活和进展监管拆分。
+
+### Changed
+
+- 主聊天窗口把两个模式 Tab 合并为一个持久化的 `BETA` 接管开关，设置页不再保留重复
+  开关。
+- 浏览器和原生 Accessibility 快照补充父子层级与结构角色。
+- 接管 Skill 更名为 `jellypet-takeover`，改为中文描述通用界面接管契约。
+- 屏幕接管只保留 Codex/TraeX app-server 路径；Claude Code/OpenCode 继续支持截图问答，
+  选择接管时返回明确错误。
+
+### Removed
+
+- 删除只面向考试场景的 `human-exam-taking` 打包 Skill。
+- 删除没有生产调用者的 Workflow/Ledger、对应实现复述测试，以及终端 Runtime 的第二套
+  JSON 接管循环和 40 轮预算。
+- 删除损坏截图的原始字节指纹兜底、一次性主气泡渲染入口、旧 Codex 专用错误枚举和无
+  调用者的设置组件。
+- 删除重复包装输入、滚动与观察循环的动作组、独立 URL Policy、原生元素 Registry 和
+  Coordinator 内重复保存的模型对话；对应职责回到 `ScreenAction`、Accessibility
+  Provider 与 Agent Runtime 会话。
+
+> 当前未发布代码仍有 TraeX/OpenCode 工具边界和真实 E2E 待办，不应直接发布。详见
+> [项目交接文档](./docs/HANDOFF.md)。
+
 ## [0.9.2] - 2026-08-19
 
 ### Changed

@@ -24,7 +24,8 @@
     <a href="#核心能力">核心能力</a> ·
     <a href="#快速开始">快速开始</a> ·
     <a href="#配置文件">配置</a> ·
-    <a href="#从源码构建">从源码构建</a>
+    <a href="#从源码构建">从源码构建</a> ·
+    <a href="#项目交接">项目交接</a>
   </p>
 </div>
 
@@ -47,7 +48,7 @@
         <li><strong>屏幕观察</strong>：选择截图问答和接管观察的显示器。</li>
         <li><strong>Agent 大脑</strong>：自动探测 Runtime，配置模型、思考强度和自定义指令。</li>
         <li><strong>果冻外形</strong>：导入一张 8×8 PNG，替换全部状态动画。</li>
-        <li><strong>模式与快捷键</strong>：不移动鼠标，也能唤醒、滚动和切换历史回答。</li>
+        <li><strong>显示与快捷键</strong>：调整过程详情，并配置唤醒、滚动和历史切换。</li>
       </ul>
       <p><sub>截图来自 v0.9.2 的内置真实预览器；点击可查看原图。</sub></p>
     </td>
@@ -85,17 +86,18 @@ flowchart LR
 
 JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 
-| Runtime | 命令 | 接入方式 |
-| --- | --- | --- |
-| Codex | `codex` | 常驻 app-server |
-| TraeX | `traex`、`traecli` 或 `trae` | 常驻 app-server |
-| Claude Code | `claude` | 非交互终端适配 |
-| OpenCode | `opencode` | 非交互终端适配 |
+| Runtime | 命令 | 接入方式 | 屏幕接管 |
+| --- | --- | --- | --- |
+| Codex | `codex` | 常驻 app-server | 支持 |
+| TraeX | `traex`、`traecli` 或 `trae` | 常驻 app-server | Beta，待真实工具面验收 |
+| Claude Code | `claude` | 非交互终端适配 | 不支持，仅截图问答 |
+| OpenCode | `opencode` | 非交互终端适配 | 不支持，仅截图问答 |
 
 自动选择顺序为 Codex → TraeX → Claude Code → OpenCode。JellyPet 从当前
 `PATH`、`~/.local/bin`、`~/.npm-global/bin`、`/opt/homebrew/bin` 和
 `/usr/local/bin` 探测命令，不再读取旧的专用路径变量或 App 内置 CLI 路径。
-`cc` 不再是 Claude Code 的别名，也永远不会被当作 Agent Runtime。
+`cc` 不再是 Claude Code 的别名，也永远不会被当作 Agent Runtime。选择 Claude Code 或
+OpenCode 时，开启接管会返回明确错误，不会启动另一套终端接管循环。
 
 ## 快速开始
 
@@ -157,7 +159,7 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 - `reasoningEffort`：`low`、`medium`、`high` 或 `xhigh`。
 - `customInstructions`：最多 4000 个字符。
 - `spriteSheet`：相对配置目录或绝对路径的 PNG；设置页导入时会自动管理。
-- `screenTakeover`：启动聊天窗口时默认选择的模式，`true` 表示屏幕接管；默认 `true`。
+- `screenTakeover`：主聊天窗口“接管”开关的持久状态；默认 `true`。
 
 屏幕选择、快捷键和活动详情属于本机界面偏好，仍由 macOS 偏好系统保存。
 
@@ -186,17 +188,26 @@ JellyPet 至少需要一种已安装且已登录的本地 Runtime：
 
 ## 屏幕接管（Beta）
 
-接管现在是默认工作模式，但模式名称始终带有 `Beta` 标记。聊天窗口会一直显示
-“截图问答 / 屏幕接管 · Beta”两个 Tab；设置页的开关只决定下次打开聊天窗口时默认
-选择哪一个，不会隐藏功能入口。接管可能点击、输入、按键、滚动、拖动和导航；
-请只在可信任务中使用，并用唤醒快捷键停止。旧的 schema 1 配置会在首次读取时迁移到
-schema 2，并把默认模式切换为接管；之后仍可在设置页关闭默认选择。
+接管默认开启，并始终在主聊天窗口显示为带 `BETA` 标记的“接管”开关；设置页不再
+提供重复入口。关闭时是只观察、只回答的截图问答，开启时果冻可以点击、输入、按键、
+滚动、拖动和导航。开关状态会直接保存；接管执行期间关闭开关或使用唤醒快捷键都会
+立即停止。旧的 schema 1 配置会在首次读取时迁移到 schema 2，并默认打开接管。
+
+屏幕接管只走 Codex/TraeX app-server，并由 AI 加载同一份中文
+`jellypet-takeover/SKILL.md`。Claude Code/OpenCode 只用于截图问答。
 
 macOS 当前前台为 Chrome 或 Edge 时，Beta 接管会依次尝试 Playwright、可发现的
 Chrome DevTools Protocol 端点，最后回退到 Accessibility、截图和 CGEvent。
 
+每次界面变化后，Agent 都应重新观察。当前开发版支持按应用、窗口、网址、角色、名称、
+值和祖先重新解析的稳定 locator。输入和滚动直接使用原子工具并在之后重新观察；发送、
+提交、购买、删除等外部副作用使用单次激活验证。会话还会在动作过多、观察过多、连续无
+变化或连续无法观察时停止，避免静默循环。
+
 > [!CAUTION]
-> 请只在可信任务中使用屏幕接管，并保留人工检查。账号、付款、删除数据、安全桌面和系统权限仍是明确边界；随时可以用唤醒快捷键停止。
+> 用户提交的任务会被视为本次执行授权，接管不会在发送、购买或删除前再次确认。只有在
+> 你确实希望完成整个任务时才开启接管；外部副作用会尝试单次执行并验证，但不提供跨重启
+> 事务保证。随时可以关闭开关或用唤醒快捷键停止。
 
 ## 隐私与安全边界
 
@@ -205,7 +216,8 @@ Chrome DevTools Protocol 端点，最后回退到 Accessibility、截图和 CGEv
 - 最近问题与回答以文字形式保存在本机，不保存对应截图。
 - Agent 子进程继承当前用户的登录环境和认证状态；JellyPet 不复制认证令牌。
 - macOS 屏幕录制、辅助功能、文件权限和安全桌面仍是最终系统边界。
-- 页面内容是不可信输入；账号、付款或删除数据等操作仍需用户检查。
+- 页面内容是不可信输入；对账号、付款或删除数据等任务，用户应在开启接管前确认目标，
+  并在完成后检查实际结果。
 
 安全问题请参阅 [SECURITY.md](SECURITY.md)。
 
@@ -237,14 +249,24 @@ swift run --disable-sandbox JellyBehaviorChecks
 - `Sources/JellyMac/`：配置存储、截图、Accessibility、浏览器、输入与 Runtime 适配。
 - `Sources/JellyApp/`：应用生命周期、桌宠、聊天框、设置页和快捷键。
 - `Tests/JellyBehaviorChecks/`：不打开桌面的核心行为检查。
+- `docs/HANDOFF.md`：当前架构、代码阅读顺序、验证边界和发布前待办。
 
 ## 当前限制
 
 - 公测包尚未使用 Developer ID 签名与 notarization。
-- Claude Code 和 OpenCode 的非交互参数可能随 CLI 版本变化。
+- Claude Code 和 OpenCode 的非交互参数可能随 CLI 版本变化；OpenCode 截图问答的内置
+  工具边界仍需真实验收。
+- TraeX 接管的内置工具面尚未像 Codex 一样完成逐项关闭和实测。
 - Beta 接管不属于稳定能力，浏览器扩展、远程桌面、DRM 内容、安全桌面和快速变化
   页面可能无法观察或操作。
 - 构建和无窗口行为检查不能替代真实桌面、真实模型与真实页面的端到端验收。
+
+## 项目交接
+
+当前 `main` 包含一组未发布的接管重构（实现基线 `52fc081`），不能把开发分支直接视为
+已发布的 `0.9.2`。接手开发前请先阅读 [项目交接文档](./docs/HANDOFF.md)：其中记录了真实数据
+流、逐文件阅读顺序、各 Runtime 的工具边界、已经执行的验证，以及发布前仍缺少的真实
+模型、浏览器和桌面 E2E 证据。
 
 ## 项目链接
 
