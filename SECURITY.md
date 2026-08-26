@@ -39,7 +39,7 @@ JellyPet 同时提供截图问答与屏幕接管。屏幕接管默认选中，�
 
 ## 未发布接管审计
 
-实现基线 `main@52fc081` 的未发布接管重构已经删除未接入的 Workflow/Ledger 和终端 Runtime
+从 `main@52fc081` 开始演进的未发布接管重构已经删除未接入的 Workflow/Ledger 和终端 Runtime
 第二套接管循环。屏幕接管只进入 Codex/TraeX app-server 路径，Claude Code/OpenCode
 只保留截图问答。
 

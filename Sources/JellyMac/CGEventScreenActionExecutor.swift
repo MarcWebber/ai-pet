@@ -37,9 +37,6 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 duration: duration
             )
         case let .typeText(target, text, replaces):
-            if try setSemanticValue(target, text: text, replaces: replaces, snapshot: snapshot) {
-                return
-            }
             let point = try coordinate(target, snapshot, in: bounds)
             try click(at: point, count: 1); try await pause(120)
             try click(at: point, count: 1); try await pause(120)
@@ -97,33 +94,6 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
             if AXUIElementPerformAction(element, action as CFString) == .success { return true }
         }
         return false
-    }
-
-    private func setSemanticValue(
-        _ target: ScreenActionTarget,
-        text: String,
-        replaces: Bool,
-        snapshot: SemanticSnapshot?
-    ) throws -> Bool {
-        guard let element = try nativeElement(target, snapshot: snapshot) else { return false }
-        var settable = DarwinBoolean(false)
-        guard AXUIElementIsAttributeSettable(
-            element, kAXValueAttribute as CFString, &settable
-        ) == .success, settable.boolValue else { return false }
-
-        var value = text
-        if !replaces {
-            var current: CFTypeRef?
-            if AXUIElementCopyAttributeValue(
-                element, kAXValueAttribute as CFString, &current
-            ) == .success, let current = current as? String {
-                value = current + text
-            }
-        }
-        guard AXUIElementSetAttributeValue(
-            element, kAXValueAttribute as CFString, value as CFTypeRef
-        ) == .success else { return false }
-        return true
     }
 
     private func axActions(_ element: AXUIElement) -> [String]? {
@@ -217,40 +187,60 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     }
 
     private func type(_ text: String) async throws {
-        let characters = Array(text)
-        let burst = characters.count > 2_000 ? 4 : characters.count > 600 ? 2 : 1
-        for start in stride(from: 0, to: characters.count, by: burst) {
+        let strokes = HumanTypingPlan.strokes(
+            for: text,
+            seed: UInt64.random(in: 1...UInt64.max)
+        )
+        for (index, stroke) in strokes.enumerated() {
             try Task.checkCancellation()
-            let value = String(characters[start..<min(start + burst, characters.count)])
-            let events = try [keyboardEvent(0, true), keyboardEvent(0, false)]
-            let utf16 = Array(value.utf16)
-            utf16.withUnsafeBufferPointer { buffer in
-                guard let address = buffer.baseAddress else { return }
-                events.forEach {
-                    $0.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: address)
-                }
+            if let mistake = stroke.mistypedText {
+                try emit(mistake)
+                try await pause(stroke.mistakeDelayMilliseconds)
+                try keyPress(.delete, [])
+                try await pause(stroke.correctionDelayMilliseconds)
             }
-            events.forEach(post)
-            let delay = characters.count > 2_000 ? 10 : characters.count > 600 ? 18 : 28
-            try await pause(delay + (value.last.map { "\n。！？!?，,；;：:".contains($0) } == true ? 45 : 0))
+            if stroke.text == "\n" {
+                try keyPress(.return, [])
+                try await pause(stroke.delayAfterMilliseconds)
+                try keyPress(.left, [.command, .shift])
+                try await pause(25)
+                let next = strokes.indices.contains(index + 1)
+                    ? strokes[index + 1].text
+                    : nil
+                if next == nil || next == "\n" {
+                    try emit(" ")
+                    try keyPress(.delete, [])
+                }
+            } else {
+                try emit(stroke.text)
+                try await pause(stroke.delayAfterMilliseconds)
+            }
         }
     }
 
     private func insert(_ text: String, replacing: Bool) async throws {
-        if replacing { try keyPress(.a, [.command]); try await pause(80) }
-        let lines = text.replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: false)
-        guard let first = lines.first else { return }
-        try await type(String(first))
-        for line in lines.dropFirst() {
-            try Task.checkCancellation()
-            try keyPress(.return, []); try await pause(45)
-            try keyPress(.left, [.command, .shift]); try await pause(20)
-            if line.isEmpty {
-                try await type(" "); try keyPress(.delete, [])
-            } else { try await type(String(line)) }
+        if replacing {
+            try keyPress(.a, [.command]); try await pause(90)
+            try keyPress(.delete, []); try await pause(120)
         }
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        try await type(normalized)
+    }
+
+    private func emit(_ text: String) throws {
+        let events = try [keyboardEvent(0, true), keyboardEvent(0, false)]
+        let utf16 = Array(text.utf16)
+        utf16.withUnsafeBufferPointer { buffer in
+            guard let address = buffer.baseAddress else { return }
+            events.forEach {
+                $0.keyboardSetUnicodeString(
+                    stringLength: buffer.count,
+                    unicodeString: address
+                )
+            }
+        }
+        events.forEach(post)
     }
 
     private func keyPress(_ key: ScreenKey, _ modifiers: [KeyModifier]) throws {

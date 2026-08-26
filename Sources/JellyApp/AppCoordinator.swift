@@ -92,6 +92,9 @@ final class AppCoordinator {
         applyConfiguredSprite()
         pet.show(on: selectedNSScreen())
         pet.jellyView.apply(activity: .idle)
+        bubble.setTakeoverShortcutLabel(
+            preferencesStore.globalShortcut.label
+        )
         updateMenu()
 
         do {
@@ -776,6 +779,9 @@ final class AppCoordinator {
         showWindow: Bool
     ) async {
         _ = preferencesStore.reloadConfiguration()
+        bubble.setTakeoverShortcutLabel(
+            preferencesStore.globalShortcut.label
+        )
         applyConfiguredSprite()
         answerHistory = Array(
             answerHistory.suffix(
@@ -887,6 +893,7 @@ final class AppCoordinator {
         do {
             try registerHotkey(shortcut)
             preferencesStore.globalShortcut = shortcut
+            bubble.setTakeoverShortcutLabel(shortcut.label)
             refreshCurrentSettings(); updateMenu()
         } catch {
             try? registerHotkey(previous)

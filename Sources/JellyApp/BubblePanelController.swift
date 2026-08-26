@@ -34,6 +34,7 @@ final class BubblePanelController: NSObject {
     private let takeoverRow = NSStackView()
     private let footer = NSStackView()
     private var purpose = Purpose.followUp
+    private var takeoverShortcutLabel = AppMetadata.shortcutLabel
     private var escapeMonitor: Any?
 
     override init() {
@@ -160,7 +161,7 @@ final class BubblePanelController: NSObject {
         show(
             title: "告诉果冻要做什么",
             badge: "屏幕接管 · Beta",
-            body: "Beta 功能：输入明确任务后，果冻可能执行鼠标和键盘动作。",
+            body: "Beta 功能：输入明确任务后，果冻可能执行鼠标和键盘动作。开始后按 \(takeoverShortcutLabel) 可随时快速退出。",
             size: NSSize(width: 390, height: 224),
             inputPlaceholder: "例如：完成这道题并提交",
             purpose: .takeover,
@@ -230,6 +231,10 @@ final class BubblePanelController: NSObject {
 
     func reposition(petFrame: NSRect, screen: NSScreen?) {
         if panel.isVisible { position(near: petFrame, on: screen) }
+    }
+
+    func setTakeoverShortcutLabel(_ label: String) {
+        takeoverShortcutLabel = label
     }
 
     func verifyTakeoverToggleLayout() -> (passed: Bool, message: String) {
@@ -310,7 +315,9 @@ final class BubblePanelController: NSObject {
             ? "关闭开关会立即停止当前接管。"
             : "Beta：开启后允许果冻执行鼠标、键盘和浏览器操作。"
         takeoverHint.stringValue = takeoverEnabled
-            ? "果冻可以按任务操作当前屏幕"
+            ? working && purpose == .takeover
+                ? "快速退出：\(takeoverShortcutLabel) · 或关闭开关"
+                : "开始后按 \(takeoverShortcutLabel) 快速退出"
             : "开启后果冻可以操作当前屏幕"
         working ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
         spinner.isHidden = !working

@@ -870,7 +870,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "定位输入目标并一次性填写完整文本；优先使用稳定 locator。编程题代码应一次性输入，不要故意逐字伪装人工。",
+                "定位输入目标并给出完整最终文本；优先使用稳定 locator。JellyPet 会用真实键盘节奏逐字输入，包含自然停顿和少量立即退格纠正，不使用整段填充或粘贴。",
                 schema(
                     properties: [
                         "target": targetSchema,

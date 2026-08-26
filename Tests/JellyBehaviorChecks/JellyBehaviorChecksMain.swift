@@ -63,6 +63,7 @@ private enum JellyBehaviorChecksMain {
         try runElementLocatorChecks()
         runSemanticHierarchyChecks()
         runTakeoverProgressMonitorChecks()
+        runHumanTypingChecks()
         await runActionGroupToolChecks()
 
         check(

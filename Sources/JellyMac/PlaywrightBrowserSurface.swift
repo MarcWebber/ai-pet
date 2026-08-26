@@ -342,14 +342,14 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
             }
         case let .typeText(target, text, replaces):
             if let ref = try ref(target, snapshot) {
-                if replaces { _ = try await command(["fill", ref, text]) }
-                else { _ = try await command(["click", ref]); _ = try await command(["type", text]) }
+                _ = try await command(["click", ref])
             } else {
                 let point = try point(target)
-                let select = replaces ? "await page.keyboard.press('Meta+A');" : ""
-                let text = try quote(text)
-                _ = try await code("await page.mouse.click(\(point.x), \(point.y)); \(select) await page.keyboard.type(\(text));")
+                _ = try await code(
+                    "await page.mouse.click(\(point.x), \(point.y));"
+                )
             }
+            try await typeHumanly(text, replacing: replaces)
         case let .drag(fromX, fromY, toX, toY, duration):
             let from = point(fromX, fromY), to = point(toX, toY)
             _ = try await code("await page.mouse.move(\(from.x), \(from.y)); await page.mouse.down(); await page.mouse.move(\(to.x), \(to.y), { steps: \(max(12, min(60, duration / 16))) }); await page.mouse.up();")
@@ -403,12 +403,70 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
         return (prefix + [value]).joined(separator: "+")
     }
 
-    private func quote(_ value: String) throws -> String {
-        String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+    private func typeHumanly(
+        _ text: String,
+        replacing: Bool
+    ) async throws {
+        let strokes = HumanTypingPlan.strokes(
+            for: text.replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n"),
+            seed: UInt64.random(in: 1...UInt64.max)
+        )
+        let encoded = try JSONEncoder().encode(strokes)
+        let plan = String(decoding: encoded, as: UTF8.self)
+        let reset = replacing
+            ? "await page.keyboard.press('Meta+A'); await page.waitForTimeout(90); await page.keyboard.press('Backspace'); await page.waitForTimeout(120);"
+            : ""
+        let body = """
+        \(reset)
+        const strokes = \(plan);
+        const typeOne = async (value) => {
+          if (/^[\\x20-\\x7E]$/.test(value)) await page.keyboard.type(value);
+          else await page.keyboard.insertText(value);
+        };
+        for (let index = 0; index < strokes.length; index++) {
+          const stroke = strokes[index];
+          if (stroke.mistypedText) {
+            await typeOne(stroke.mistypedText);
+            await page.waitForTimeout(stroke.mistakeDelayMilliseconds);
+            await page.keyboard.press('Backspace');
+            await page.waitForTimeout(stroke.correctionDelayMilliseconds);
+          }
+          if (stroke.text === '\\n') {
+            await page.keyboard.press('Enter');
+            await page.waitForTimeout(stroke.delayAfterMilliseconds);
+            await page.keyboard.press('Meta+Shift+ArrowLeft');
+            await page.waitForTimeout(25);
+            const next = strokes[index + 1]?.text;
+            if (next === undefined || next === '\\n') {
+              await page.keyboard.type(' ');
+              await page.keyboard.press('Backspace');
+            }
+          } else {
+            await typeOne(stroke.text);
+            await page.waitForTimeout(stroke.delayAfterMilliseconds);
+          }
+        }
+        """
+        let delay = strokes.reduce(0) {
+            $0 + $1.delayAfterMilliseconds
+                + ($1.mistypedText == nil
+                    ? 0
+                    : $1.mistakeDelayMilliseconds
+                        + $1.correctionDelayMilliseconds)
+        }
+        let timeout = min(3_600, max(30, TimeInterval(delay) / 1_000 + 20))
+        _ = try await code(body, timeout: timeout)
     }
 
-    private func code(_ body: String) async throws -> String {
-        try await command(["run-code", "async (page) => { \(body) }"])
+    private func code(
+        _ body: String,
+        timeout: TimeInterval = 30
+    ) async throws -> String {
+        try await command(
+            ["run-code", "async (page) => { \(body) }"],
+            timeout: timeout
+        )
     }
 
     private func command(_ arguments: [String], timeout: TimeInterval = 30) async throws -> String {
