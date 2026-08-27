@@ -36,15 +36,22 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 to: coordinate(toX, toY, in: bounds),
                 duration: duration
             )
-        case let .typeText(target, text, replaces):
-            let observedText = semanticValue(for: target, snapshot: snapshot)
-            let point = try coordinate(target, snapshot, in: bounds)
-            try click(at: point, count: 1); try await pause(120)
-            try click(at: point, count: 1); try await pause(120)
+        case let .typeText(target, text):
+            guard let observedText = semanticValue(
+                for: target,
+                snapshot: snapshot
+            ) else {
+                throw PetFailure.editorTextUnavailable
+            }
+            let focusedElement = try await focusTextTarget(
+                target,
+                snapshot: snapshot,
+                bounds: bounds
+            )
             try await insert(
                 text,
-                replacing: replaces,
-                currentText: observedText ?? focusedTextValue()
+                currentText: observedText,
+                focusedElement: focusedElement
             )
         case let .keyPress(key, modifiers):
             try keyPress(key, modifiers)
@@ -141,36 +148,121 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         return snapshot?.elements.first(where: { $0.id == elementID })?.value
     }
 
-    private func focusedTextValue() -> String? {
-        let system = AXUIElementCreateSystemWide()
-        var focusedValue: CFTypeRef?
+    private func focusTextTarget(
+        _ target: ScreenActionTarget,
+        snapshot: SemanticSnapshot?,
+        bounds: CGRect
+    ) async throws -> AXUIElement {
+        guard let element = try nativeElement(target, snapshot: snapshot) else {
+            throw PetFailure.semanticTargetUnavailable
+        }
+        var processID: pid_t = 0
+        let frontmostID = NSWorkspace.shared.frontmostApplication?
+            .processIdentifier
+        let pidStatus = AXUIElementGetPid(element, &processID)
+        guard pidStatus == .success, frontmostID == processID else {
+            throw PetFailure.inputFocusChanged
+        }
+        try click(at: coordinate(target, snapshot, in: bounds), count: 1)
+        try await pause(120)
+        try ensureFocused(element)
+        return element
+    }
+
+    private func ensureFocused(_ expected: AXUIElement) throws {
+        var processID: pid_t = 0
+        guard AXUIElementGetPid(expected, &processID) == .success,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier
+                == processID else {
+            throw PetFailure.inputFocusChanged
+        }
+        guard let focused = focusedElement(processID: processID) else {
+            throw PetFailure.inputFocusChanged
+        }
+        if isSameOrDescendant(focused, of: expected) { return }
+        guard isEditorSuggestion(focused) else {
+            throw PetFailure.inputFocusChanged
+        }
+        try keyPress(.escape, [])
+        usleep(150_000)
+        guard let restored = focusedElement(processID: processID) else {
+            throw PetFailure.inputFocusChanged
+        }
+        guard isSameOrDescendant(restored, of: expected) else {
+            throw PetFailure.inputFocusChanged
+        }
+    }
+
+    private func focusedElement(processID: pid_t) -> AXUIElement? {
+        let application = AXUIElementCreateApplication(processID)
+        var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
-            system,
+            application,
             kAXFocusedUIElementAttribute as CFString,
-            &focusedValue
+            &value
         ) == .success,
-              let focusedValue,
-              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+              let value,
+              CFGetTypeID(value) == AXUIElementGetTypeID() else {
             return nil
         }
-        let focused = unsafeBitCast(focusedValue, to: AXUIElement.self)
-        var rawValue: CFTypeRef?, subroleValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            focused,
-            kAXValueAttribute as CFString,
-            &rawValue
-        ) == .success,
-              let value = rawValue as? String else { return nil }
-        _ = AXUIElementCopyAttributeValue(
-            focused,
-            kAXSubroleAttribute as CFString,
-            &subroleValue
-        )
-        return BrowserSemanticPolicy.safeValue(
-            role: .textField,
-            subrole: subroleValue as? String,
-            value: value
-        )
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+
+    private func isSameOrDescendant(
+        _ element: AXUIElement,
+        of ancestor: AXUIElement
+    ) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<32 {
+            guard let value = current else { return false }
+            if CFEqual(value, ancestor) { return true }
+            var parentValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                value,
+                kAXParentAttribute as CFString,
+                &parentValue
+            ) == .success,
+                  let parentValue,
+                  CFGetTypeID(parentValue) == AXUIElementGetTypeID() else {
+                return false
+            }
+            current = unsafeBitCast(parentValue, to: AXUIElement.self)
+        }
+        return false
+    }
+
+    private func isEditorSuggestion(_ element: AXUIElement) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<16 {
+            guard let value = current else { return false }
+            var roleValue: CFTypeRef?, descriptionValue: CFTypeRef?
+            _ = AXUIElementCopyAttributeValue(
+                value,
+                kAXRoleAttribute as CFString,
+                &roleValue
+            )
+            _ = AXUIElementCopyAttributeValue(
+                value,
+                kAXDescriptionAttribute as CFString,
+                &descriptionValue
+            )
+            if roleValue as? String == kAXListRole,
+               descriptionValue as? String == "Suggest" {
+                return true
+            }
+            var parentValue: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                value,
+                kAXParentAttribute as CFString,
+                &parentValue
+            ) == .success,
+                  let parentValue,
+                  CFGetTypeID(parentValue) == AXUIElementGetTypeID() else {
+                return false
+            }
+            current = unsafeBitCast(parentValue, to: AXUIElement.self)
+        }
+        return false
     }
 
     private func onlineBounds(_ displayID: UInt32) throws -> CGRect {
@@ -231,47 +323,173 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         }
     }
 
-    private func type(_ text: String) async throws {
+    private func type(
+        _ text: String,
+        focusedElement: AXUIElement? = nil
+    ) async throws {
         let strokes = HumanTypingPlan.strokes(
             for: text,
             seed: UInt64.random(in: 1...UInt64.max)
         )
-        for (index, stroke) in strokes.enumerated() {
+        var index = 0
+        while index < strokes.count {
+            let stroke = strokes[index]
             try Task.checkCancellation()
+            if let focusedElement { try ensureFocused(focusedElement) }
             if let mistake = stroke.mistypedText {
                 try emit(mistake)
                 try await pause(stroke.mistakeDelayMilliseconds)
+                if let focusedElement { try ensureFocused(focusedElement) }
                 try keyPress(.delete, [])
                 try await pause(stroke.correctionDelayMilliseconds)
             }
             if stroke.text == "\n" {
                 try keyPress(.return, [])
                 try await pause(stroke.delayAfterMilliseconds)
-                try keyPress(.left, [.command, .shift])
-                try await pause(25)
-                let next = strokes.indices.contains(index + 1)
-                    ? strokes[index + 1].text
-                    : nil
-                if next == nil || next == "\n" {
-                    try emit(" ")
-                    try keyPress(.delete, [])
+                index += 1
+                guard let focusedElement else { continue }
+                var desiredIndent = ""
+                while index < strokes.count,
+                      strokes[index].text == " "
+                        || strokes[index].text == "\t" {
+                    desiredIndent += strokes[index].text
+                    index += 1
                 }
+                try await matchAutomaticIndentation(
+                    desiredIndent,
+                    focusedElement: focusedElement
+                )
             } else {
                 try emit(stroke.text)
+                if stroke.text == "{", let focusedElement {
+                    try await pause(50)
+                    try await removeAutoClosedBrace(
+                        focusedElement: focusedElement
+                    )
+                }
                 try await pause(stroke.delayAfterMilliseconds)
+                index += 1
             }
         }
     }
 
+    private func removeAutoClosedBrace(
+        focusedElement: AXUIElement
+    ) async throws {
+        try ensureFocused(focusedElement)
+        var rawValue: CFTypeRef?, rawSelection: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXValueAttribute as CFString,
+            &rawValue
+        ) == .success,
+              let value = rawValue as? String,
+              AXUIElementCopyAttributeValue(
+                  focusedElement,
+                  kAXSelectedTextRangeAttribute as CFString,
+                  &rawSelection
+              ) == .success,
+              let rawSelection,
+              CFGetTypeID(rawSelection) == AXValueGetTypeID() else {
+            throw PetFailure.inputFocusChanged
+        }
+        let selectionValue = unsafeBitCast(rawSelection, to: AXValue.self)
+        var selection = CFRange()
+        let units = Array(value.utf16)
+        guard AXValueGetValue(selectionValue, .cfRange, &selection),
+              selection.length == 0,
+              selection.location >= 0,
+              selection.location <= units.count else {
+            throw PetFailure.inputFocusChanged
+        }
+        guard selection.location < units.count,
+              units[selection.location] == 125 else { return }
+        try keyPress(.forwardDelete, [])
+        try await pause(45)
+    }
+
+    private func matchAutomaticIndentation(
+        _ desired: String,
+        focusedElement: AXUIElement
+    ) async throws {
+        let wanted = Array(desired)
+        for _ in 0..<64 {
+            try ensureFocused(focusedElement)
+            let current = Array(try automaticIndentation(
+                focusedElement: focusedElement
+            ))
+            if current == wanted { return }
+            var shared = 0
+            while shared < min(current.count, wanted.count),
+                  current[shared] == wanted[shared] {
+                shared += 1
+            }
+            if current.count > shared {
+                try keyPress(.delete, [])
+                try await pause(45)
+            } else if wanted.count > shared {
+                try emit(String(wanted[shared]))
+                try await pause(45)
+            } else {
+                throw PetFailure.inputFocusChanged
+            }
+        }
+        throw PetFailure.inputFocusChanged
+    }
+
+    private func automaticIndentation(
+        focusedElement: AXUIElement
+    ) throws -> String {
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXValueAttribute as CFString,
+            &rawValue
+        ) == .success,
+              let value = rawValue as? String else {
+            throw PetFailure.editorTextUnavailable
+        }
+        var rawSelection: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focusedElement,
+            kAXSelectedTextRangeAttribute as CFString,
+            &rawSelection
+        ) == .success,
+              let rawSelection,
+              CFGetTypeID(rawSelection) == AXValueGetTypeID() else {
+            throw PetFailure.inputFocusChanged
+        }
+        let selectionValue = unsafeBitCast(rawSelection, to: AXValue.self)
+        var selection = CFRange()
+        guard AXValueGetValue(selectionValue, .cfRange, &selection),
+              selection.length == 0 else {
+            throw PetFailure.inputFocusChanged
+        }
+        let units = Array(value.utf16)
+        guard selection.location >= 0,
+              selection.location <= units.count else {
+            throw PetFailure.inputFocusChanged
+        }
+        let cursor = selection.location
+        let lineStart = units[..<cursor].lastIndex(of: 10).map { $0 + 1 } ?? 0
+        let automatic = String(
+            decoding: units[lineStart..<cursor],
+            as: UTF16.self
+        )
+        guard automatic.allSatisfy({ $0 == " " || $0 == "\t" }) else {
+            throw PetFailure.inputFocusChanged
+        }
+        return automatic
+    }
+
     private func insert(
         _ text: String,
-        replacing: Bool,
-        currentText: String?
+        currentText: String?,
+        focusedElement: AXUIElement
     ) async throws {
         switch HumanTextEditPlan.make(
             currentText: currentText,
-            desiredText: text,
-            replacesExistingText: replacing
+            desiredText: text
         ) {
         case .currentTextUnavailable:
             throw PetFailure.editorTextUnavailable
@@ -280,26 +498,39 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         case .unchanged:
             return
         case let .append(value):
-            try await type(value)
+            try await type(value, focusedElement: focusedElement)
         case let .insertAtBoundary(prefix, suffix, value):
             try await moveToTextBoundary(
                 prefixCount: prefix,
-                suffixCount: suffix
+                suffixCount: suffix,
+                focusedElement: focusedElement
             )
-            if !value.isEmpty { try await type(value) }
+            if !value.isEmpty {
+                try await type(value, focusedElement: focusedElement)
+            }
         }
     }
 
     private func moveToTextBoundary(
         prefixCount: Int,
-        suffixCount: Int
+        suffixCount: Int,
+        focusedElement: AXUIElement
     ) async throws {
+        try ensureFocused(focusedElement)
         if prefixCount <= suffixCount {
             try keyPress(.up, [.command]); try await pause(70)
-            try await repeatKey(.right, count: prefixCount)
+            try await repeatKey(
+                .right,
+                count: prefixCount,
+                focusedElement: focusedElement
+            )
         } else {
             try keyPress(.down, [.command]); try await pause(70)
-            try await repeatKey(.left, count: suffixCount)
+            try await repeatKey(
+                .left,
+                count: suffixCount,
+                focusedElement: focusedElement
+            )
         }
         try await pause(90)
     }
@@ -307,11 +538,13 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     private func repeatKey(
         _ key: ScreenKey,
         modifiers: [KeyModifier] = [],
-        count: Int
+        count: Int,
+        focusedElement: AXUIElement? = nil
     ) async throws {
         guard count > 0 else { return }
         for index in 0..<count {
             try Task.checkCancellation()
+            if let focusedElement { try ensureFocused(focusedElement) }
             try keyPress(key, modifiers)
             if index % 20 == 19 { try await pause(18) }
         }

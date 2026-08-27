@@ -20,7 +20,7 @@ public enum ScreenAction: Equatable, Sendable {
     case click(ScreenActionTarget)
     case doubleClick(ScreenActionTarget)
     case drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMilliseconds: Int)
-    case typeText(target: ScreenActionTarget, text: String, replacesExistingText: Bool)
+    case typeText(target: ScreenActionTarget, text: String)
     case keyPress(key: ScreenKey, modifiers: [KeyModifier])
     case navigate(url: String)
     case scroll(target: ScreenActionTarget?, deltaX: Int, deltaY: Int)
@@ -47,8 +47,9 @@ public enum ScreenAction: Equatable, Sendable {
             try Self.validate(x: fromX, y: fromY)
             try Self.validate(x: toX, y: toY)
             guard (200...2_000).contains(duration) else { throw PetFailure.invalidScreenAction }
-        case let .typeText(target, text, _):
+        case let .typeText(target, text):
             try target.validate()
+            guard !target.isVisual else { throw PetFailure.invalidScreenAction }
             guard !text.isEmpty, text.utf16.count <= 100_000 else { throw PetFailure.invalidScreenAction }
         case let .keyPress(key, modifiers):
             guard Set(modifiers).count == modifiers.count,
@@ -106,7 +107,7 @@ private extension ScreenActionTarget {
 extension ScreenAction: Codable {
     private enum CodingKeys: String, CodingKey {
         case kind, target, fromX, fromY, toX, toY, durationMilliseconds
-        case text, replacesExistingText
+        case text
         case key, modifiers, url, deltaX, deltaY, milliseconds
     }
 
@@ -126,8 +127,7 @@ extension ScreenAction: Codable {
         case .typeText:
             self = .typeText(
                 target: try values.decode(ScreenActionTarget.self, forKey: .target),
-                text: try values.decode(String.self, forKey: .text),
-                replacesExistingText: try values.decode(Bool.self, forKey: .replacesExistingText)
+                text: try values.decode(String.self, forKey: .text)
             )
         case .keyPress:
             self = .keyPress(
@@ -155,9 +155,8 @@ extension ScreenAction: Codable {
             try values.encode(fromX, forKey: .fromX); try values.encode(fromY, forKey: .fromY)
             try values.encode(toX, forKey: .toX); try values.encode(toY, forKey: .toY)
             try values.encode(duration, forKey: .durationMilliseconds)
-        case let .typeText(target, text, replaces):
+        case let .typeText(target, text):
             try values.encode(target, forKey: .target); try values.encode(text, forKey: .text)
-            try values.encode(replaces, forKey: .replacesExistingText)
         case let .keyPress(key, modifiers):
             try values.encode(key, forKey: .key); try values.encode(modifiers, forKey: .modifiers)
         case let .navigate(url): try values.encode(url, forKey: .url)
@@ -275,11 +274,10 @@ extension ScreenAction {
             return .click(try target.resolved(in: snapshot))
         case let .doubleClick(target):
             return .doubleClick(try target.resolved(in: snapshot))
-        case let .typeText(target, text, replaces):
+        case let .typeText(target, text):
             return .typeText(
                 target: try target.resolved(in: snapshot),
-                text: text,
-                replacesExistingText: replaces
+                text: text
             )
         case let .scroll(target, deltaX, deltaY):
             return .scroll(
@@ -301,7 +299,7 @@ extension ScreenAction {
     public var needsVisualObservation: Bool {
         switch self {
         case let .click(target), let .doubleClick(target),
-             let .typeText(target, _, _):
+             let .typeText(target, _):
             return target.isVisual
         case let .scroll(target, _, _):
             return target?.isVisual == true

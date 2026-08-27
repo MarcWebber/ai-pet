@@ -15,8 +15,8 @@
 
 ### Changed
 
-- 原生输入不再通过 Accessibility 整段赋值，Playwright 输入不再使用 `fill`；两条路径
-  共享同一套自然输入预设，并保持最终文本精确一致。
+- 文本输入不再通过 Accessibility 整段赋值或剪贴板粘贴；输入只走原生语义目标与逐键
+  执行，并在每次按键前确认精确焦点。
 - 主聊天窗口把两个模式 Tab 合并为一个持久化的 `BETA` 接管开关，设置页不再保留重复
   开关。
 - 浏览器和原生 Accessibility 快照补充父子层级与结构角色。
@@ -34,9 +34,12 @@
 - 删除重复包装输入、滚动与观察循环的动作组、独立 URL Policy、原生元素 Registry 和
   Coordinator 内重复保存的模型对话；对应职责回到 `ScreenAction`、Accessibility
   Provider 与 Agent Runtime 会话。
+- 删除 Playwright/CDP 自动附着与原生回退路由；接管只保留 Accessibility、全屏观察和
+  CGEvent 一条执行链。
+- 删除 `type_text` 的 `replace` 分叉；模型只提交完整最终文本，无法安全保留已有内容时
+  立即停止。
 
-> 当前未发布代码仍有 TraeX/OpenCode 工具边界和真实 E2E 待办，不应直接发布。详见
-> [项目交接文档](./docs/HANDOFF.md)。
+> 当前未发布代码仍有 TraeX/OpenCode 工具边界和真实 E2E 待办，不应直接发布。
 
 ## [0.9.2] - 2026-08-19
 

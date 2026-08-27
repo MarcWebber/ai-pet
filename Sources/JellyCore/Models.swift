@@ -16,6 +16,7 @@ public enum PetFailure: Error, Equatable, Sendable {
     case invalidScreenAction
     case semanticTargetUnavailable
     case semanticLocatorFailed(String)
+    case inputFocusChanged
     case screenActionFailed
 }
 
@@ -52,6 +53,8 @@ extension PetFailure: LocalizedError {
             return "AI 连续引用了当前页面快照中不存在的元素，接管已停止。"
         case let .semanticLocatorFailed(message):
             return "无法在当前界面唯一定位目标元素：\(message)"
+        case .inputFocusChanged:
+            return "输入目标没有获得焦点，或输入过程中前台窗口发生了变化；为避免把内容打到别处，本次输入已立即停止。"
         case .screenActionFailed:
             return "无法执行鼠标或键盘动作，接管已停止。"
         }

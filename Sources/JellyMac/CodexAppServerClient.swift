@@ -318,7 +318,7 @@ actor CodexAppServerClient {
             "sandbox": "danger-full-access",
             "ephemeral": false,
             "baseInstructions": enablesScreenTools
-                ? "你是 JellyPet 的界面操作 Agent。使用 jellypet 命名空间里的工具观察和操作当前界面；根据每次真实工具结果继续工作，不要返回动作 JSON。不得使用 Shell、文件修改或未提供的外部工具。"
+                ? "你是 JellyPet 的界面操作 Agent。使用 jellypet 命名空间里的工具观察和操作当前界面；根据每次真实工具结果继续工作，不要返回动作 JSON。JellyPet 动态工具的调用结果是字符串；在代码模式中必须直接 text(result)，禁止读取 result.content。不得使用 Shell、文件修改或未提供的外部工具。"
                 : "你是 JellyPet 的屏幕问答助手。只回答用户的问题，不执行界面操作、文件修改或外部命令。",
             "config": ["model_reasoning_effort": request.reasoningEffort.rawValue]
         ]
@@ -741,8 +741,8 @@ actor CodexAppServerClient {
         case "type_text":
             specification = (
                 "typeText",
-                ["target", "text", "replace"],
-                ["target", "text", "replace"]
+                ["target", "text"],
+                ["target", "text"]
             )
         case "key_press":
             specification = (
@@ -775,9 +775,6 @@ actor CodexAppServerClient {
             object["target"] = try normalizedTarget(target)
         } else if keys.contains("target") {
             throw CodexAppServerError.invalidResponse
-        }
-        if tool == "type_text" {
-            object["replacesExistingText"] = object.removeValue(forKey: "replace")
         }
         let data = try JSONSerialization.data(withJSONObject: object)
         return .perform(try JSONDecoder().decode(ScreenAction.self, from: data))
@@ -827,7 +824,7 @@ actor CodexAppServerClient {
     private static let dynamicTools: [[String: Any]] = [[
         "type": "namespace",
         "name": "jellypet",
-        "description": "观察并操作 JellyPet 当前接管的浏览器或桌面界面。",
+        "description": "观察并操作 JellyPet 当前接管的浏览器或桌面界面。调用结果是字符串；代码模式中直接 text(result)，不要读取 result.content。",
         "tools": [
             tool(
                 "observe",
@@ -870,14 +867,13 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "定位输入目标并给出完整最终文本；优先使用稳定 locator。必须原样保留编辑器已有的非空白代码，只能在空白位置逐字补全；任何删除或改写原代码的请求都会被拒绝。",
+                "定位一个可读取当前值的语义输入目标，并给出完整最终文本。没有语义目标、目标无法获得焦点、前台窗口变化，或最终文本会改写已有非空白内容时立即停止；不使用视觉坐标或焦点兜底。",
                 schema(
                     properties: [
-                        "target": targetSchema,
-                        "text": ["type": "string", "minLength": 1, "maxLength": 100_000],
-                        "replace": ["type": "boolean"]
+                        "target": semanticTargetSchema,
+                        "text": ["type": "string", "minLength": 1, "maxLength": 100_000]
                     ],
-                    required: ["target", "text", "replace"]
+                    required: ["target", "text"]
                 )
             ),
             tool(
@@ -983,6 +979,21 @@ actor CodexAppServerClient {
             schema(
                 properties: ["x": coordinateSchema, "y": coordinateSchema],
                 required: ["x", "y"]
+            ),
+            schema(
+                properties: ["locator": locatorSchema],
+                required: ["locator"]
+            )
+        ]
+    ]
+
+    private static let semanticTargetSchema: [String: Any] = [
+        "oneOf": [
+            schema(
+                properties: [
+                    "elementID": ["type": "string", "minLength": 1]
+                ],
+                required: ["elementID"]
             ),
             schema(
                 properties: ["locator": locatorSchema],

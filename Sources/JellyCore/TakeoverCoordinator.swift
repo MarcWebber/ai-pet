@@ -514,25 +514,7 @@ public final class TakeoverCoordinator {
         } catch {
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
-            let unavailableDecision = session?.progress.recordObservation(
-                snapshot: nil,
-                screenshotPNG: nil
-            ) ?? .proceed
-            if case let .stop(reason) = unavailableDecision {
-                session?.terminalStopReason = reason
-                trace(
-                    .failure,
-                    "接管监管已停止任务",
-                    kind: .outcome,
-                    sequence: sequence,
-                    details: reason
-                )
-                publish(.deciding, reason)
-                return ScreenToolResult(
-                    success: false,
-                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
-                )
-            }
+            session?.terminalStopReason = message
             trace(
                 .failure,
                 "观察失败",
@@ -540,14 +522,11 @@ public final class TakeoverCoordinator {
                 sequence: sequence,
                 details: message
             )
-            let warning: String
-            if case let .warning(progressWarning) = unavailableDecision {
-                warning = " \(progressWarning)"
-            } else {
-                warning = ""
-            }
-            publish(.deciding, "观察失败，原因已返回 Agent")
-            return ScreenToolResult(success: false, message: "\(message)\(warning)")
+            publish(.deciding, "观察失败，本轮接管已停止")
+            return ScreenToolResult(
+                success: false,
+                message: "\(message) 本轮接管已停止；不要重复截图或改用其他链路。"
+            )
         }
     }
 
@@ -639,6 +618,7 @@ public final class TakeoverCoordinator {
             session?.hasScreenshot = false
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
+            session?.terminalStopReason = message
             trace(
                 .failure,
                 "\(action.label) 执行失败",
@@ -646,10 +626,10 @@ public final class TakeoverCoordinator {
                 sequence: sequence,
                 details: message
             )
-            publish(.deciding, "操作失败，原因已返回 Agent")
+            publish(.deciding, "操作失败，本轮接管已停止")
             return ScreenToolResult(
                 success: false,
-                message: "\(message) 请重新观察后换一种定位或操作方式。"
+                message: "\(message) 本轮接管已停止；不要换目标、坐标或导航兜底。"
             )
         }
     }
@@ -702,8 +682,8 @@ public final class TakeoverCoordinator {
         case .doubleClick: "双击当前目标"
         case let .drag(fromX, fromY, toX, toY, duration):
             "从 (\(fromX), \(fromY)) 拖到 (\(toX), \(toY))，持续 \(duration) 毫秒"
-        case let .typeText(_, text, replaces):
-            "输入 \(text.count) 个字符，\(replaces ? "替换原内容" : "保留原内容")"
+        case let .typeText(_, text):
+            "输入 \(text.count) 个字符（完整最终文本）"
         case let .keyPress(key, modifiers):
             "按键 \((modifiers.map(\.rawValue) + [key.rawValue]).joined(separator: "+"))"
         case let .navigate(url): "打开 \(url)"

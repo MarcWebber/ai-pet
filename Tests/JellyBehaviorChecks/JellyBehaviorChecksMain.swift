@@ -87,7 +87,6 @@ private enum JellyBehaviorChecksMain {
     @MainActor
     static func main() async throws {
         try runElementLocatorChecks()
-        runSemanticHierarchyChecks()
         runTakeoverProgressMonitorChecks()
         runHumanTypingChecks()
         await runActionGroupToolChecks()
@@ -146,47 +145,6 @@ private enum JellyBehaviorChecksMain {
                 identifier: "monaco-editor"
             ) == .textField,
             "an editor-labelled web area must be exposed as an input"
-        )
-
-        let playwrightSnapshot = PlaywrightSnapshotParser.parse(
-            yaml: """
-            - heading "代码题" [level=1]
-            - textbox "Code editor": "print(1)" [ref=e5] [box=128,90,768,540]
-            - checkbox "保存答案" [checked] [ref=e6] [box=900,640,120,40]
-            - button "运行" [ref=e8] [box=960,720,160,54]
-            """,
-            commandOutput: """
-            ### Page
-            - Page URL: https://example.com/problem/1
-            - Page Title: 示例代码题
-            """
-        )
-        check(
-            playwrightSnapshot?.pageURL == "https://example.com/problem/1"
-                && playwrightSnapshot?.elements.map(\.id) == ["e5", "e6", "e8"]
-                && playwrightSnapshot?.elements.first?.value == "print(1)"
-                && playwrightSnapshot?.elements[1].value == "checked",
-            "Playwright snapshots must preserve page identity, values and refs"
-        )
-        let emptyEditorSnapshot = PlaywrightSnapshotParser.parse(
-            yaml: "- textbox \"Code editor\": \"\" [ref=e1] [box=0,0,800,600]",
-            commandOutput: ""
-        )
-        check(
-            emptyEditorSnapshot?.elements.first?.value == "",
-            "empty editors must remain distinguishable from unreadable editors"
-        )
-        check(
-            PlaywrightBrowserChannel.channel(
-                bundleIdentifier: "com.google.Chrome"
-            ) == .chrome,
-            "Chrome must map to its Playwright attachment channel"
-        )
-        check(
-            PlaywrightBrowserChannel.channel(
-                bundleIdentifier: "com.apple.Safari"
-            ) == nil,
-            "unsupported browsers must use the native route"
         )
 
         var validNavigation = true

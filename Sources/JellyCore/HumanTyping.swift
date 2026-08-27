@@ -37,11 +37,9 @@ public enum HumanTextEdit: Equatable, Sendable {
 public enum HumanTextEditPlan {
     public static func make(
         currentText: String?,
-        desiredText: String,
-        replacesExistingText: Bool
+        desiredText: String
     ) -> HumanTextEdit {
         let desired = normalize(desiredText)
-        guard replacesExistingText else { return .append(desired) }
         guard let currentText else { return .currentTextUnavailable }
         let current = normalize(currentText)
         guard current != desired else { return .unchanged }

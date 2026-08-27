@@ -257,12 +257,18 @@ final class BubblePanelController: NSObject {
         let accessibilityLabel = takeoverSwitch.accessibilityLabel()
         updateTakeoverAppearance(enabled: false, active: false)
         let offTitle = takeoverTitle.stringValue
+        let offStatus = takeoverBeta.stringValue
+        let offBorderWidth = takeoverRow.layer?.borderWidth
         updateTakeoverAppearance(enabled: true, active: false)
         let onTitle = takeoverTitle.stringValue
+        let onStatus = takeoverBeta.stringValue
         let onColor = takeoverTitle.textColor
+        let onBorderWidth = takeoverRow.layer?.borderWidth
         updateTakeoverAppearance(enabled: true, active: true)
         let activeTitle = takeoverTitle.stringValue
+        let activeStatus = takeoverBeta.stringValue
         let activeColor = takeoverTitle.textColor
+        let activeBorderWidth = takeoverRow.layer?.borderWidth
         updateTakeoverAppearance(enabled: true, active: false)
         let passed = rowBounds.width >= 360
             && rowBounds.height >= 20
@@ -273,9 +279,14 @@ final class BubblePanelController: NSObject {
             && offTitle == "接管已关闭"
             && onTitle == "接管已开启"
             && activeTitle == "接管进行中"
+            && offStatus == "已关闭"
+            && onStatus == "已开启"
+            && activeStatus == "进行中"
             && onColor?.isEqual(NSColor.systemGreen) == true
             && activeColor?.isEqual(NSColor.systemOrange) == true
-            && takeoverRow.layer?.borderWidth == 1
+            && offBorderWidth == 1
+            && onBorderWidth == 2
+            && activeBorderWidth == 2
         return (
             passed,
             "row=\(Int(rowBounds.width))×\(Int(rowBounds.height)), switch=\(Int(switchFrame.minX)),\(Int(switchFrame.minY)) \(Int(switchFrame.width))×\(Int(switchFrame.height)) fits=\(switchFits), beta=\(Int(betaFrame.minX)),\(Int(betaFrame.minY)) \(Int(betaFrame.width))×\(Int(betaFrame.height)) fits=\(betaFits), states=\(offTitle)/\(onTitle)/\(activeTitle), label=\(accessibilityLabel ?? "nil")"
@@ -511,7 +522,7 @@ final class BubblePanelController: NSObject {
             content.bottomAnchor.constraint(equalTo: glass.bottomAnchor, constant: -14),
             header.widthAnchor.constraint(equalTo: content.widthAnchor),
             takeoverRow.widthAnchor.constraint(equalTo: content.widthAnchor),
-            takeoverBeta.widthAnchor.constraint(equalToConstant: 40),
+            takeoverBeta.widthAnchor.constraint(equalToConstant: 48),
             takeoverBeta.heightAnchor.constraint(equalToConstant: 16),
             scroll.widthAnchor.constraint(equalTo: content.widthAnchor),
             footer.widthAnchor.constraint(equalTo: content.widthAnchor),
@@ -531,29 +542,44 @@ final class BubblePanelController: NSObject {
 
     private func updateTakeoverAppearance(enabled: Bool, active: Bool) {
         let accent: NSColor
+        let status: String
         if active {
             takeoverTitle.stringValue = "接管进行中"
             accent = .systemOrange
+            status = "进行中"
         } else if enabled {
             takeoverTitle.stringValue = "接管已开启"
             accent = .systemGreen
+            status = "已开启"
         } else {
             takeoverTitle.stringValue = "接管已关闭"
-            accent = .secondaryLabelColor
+            accent = .systemGray
+            status = "已关闭"
         }
         takeoverTitle.textColor = accent
+        takeoverBeta.stringValue = status
+        takeoverBeta.textColor = .white
+        takeoverBeta.layer?.backgroundColor = accent
+            .withAlphaComponent(active || enabled ? 0.92 : 0.72)
+            .cgColor
+        takeoverBeta.layer?.borderColor = accent.cgColor
         takeoverSwitch.setAccessibilityValue(
             active ? "进行中" : enabled ? "已开启" : "已关闭"
         )
         takeoverSwitch.layer?.backgroundColor = accent
-            .withAlphaComponent(active ? 0.20 : enabled ? 0.14 : 0.04)
+            .withAlphaComponent(active ? 0.42 : enabled ? 0.30 : 0.08)
             .cgColor
+        takeoverSwitch.layer?.borderColor = accent
+            .withAlphaComponent(active || enabled ? 0.85 : 0.25)
+            .cgColor
+        takeoverSwitch.layer?.borderWidth = active || enabled ? 2 : 1
         takeoverRow.layer?.backgroundColor = accent
-            .withAlphaComponent(active ? 0.15 : enabled ? 0.10 : 0.05)
+            .withAlphaComponent(active ? 0.27 : enabled ? 0.19 : 0.06)
             .cgColor
         takeoverRow.layer?.borderColor = accent
-            .withAlphaComponent(active ? 0.42 : enabled ? 0.30 : 0.16)
+            .withAlphaComponent(active ? 0.95 : enabled ? 0.72 : 0.22)
             .cgColor
+        takeoverRow.layer?.borderWidth = active || enabled ? 2 : 1
     }
 
     private func timeline(

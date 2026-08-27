@@ -60,8 +60,7 @@ func runHumanTypingChecks() {
     """
     let edit = HumanTextEditPlan.make(
         currentText: starter,
-        desiredText: completed,
-        replacesExistingText: true
+        desiredText: completed
     )
     if case let .insertAtBoundary(prefix, suffix, replacement) = edit {
         let old = Array(starter), new = Array(completed)
@@ -80,16 +79,14 @@ func runHumanTypingChecks() {
     check(
         HumanTextEditPlan.make(
             currentText: completed,
-            desiredText: completed,
-            replacesExistingText: true
+            desiredText: completed
         ) == .unchanged,
         "identical editor content must not be typed again"
     )
     check(
         HumanTextEditPlan.make(
             currentText: nil,
-            desiredText: completed,
-            replacesExistingText: true
+            desiredText: completed
         ) == .currentTextUnavailable,
         "unknown editor content must stop instead of deleting starter code"
     )
@@ -100,16 +97,14 @@ func runHumanTypingChecks() {
     check(
         HumanTextEditPlan.make(
             currentText: nonBlankStarter,
-            desiredText: completed,
-            replacesExistingText: true
+            desiredText: completed
         ) == .existingTextProtected,
         "non-blank starter code must never be deleted or replaced"
     )
     check(
         HumanTextEditPlan.make(
             currentText: "existing code",
-            desiredText: "different code",
-            replacesExistingText: true
+            desiredText: "different code"
         ) == .existingTextProtected,
         "an unrelated final answer must never trigger replace-all"
     )
@@ -120,5 +115,12 @@ func runHumanTypingChecks() {
                 modifiers: [.command]
             ).validate()) == nil,
         "model-visible key presses must not expose delete or select-all"
+    )
+    check(
+        (try? ScreenAction.typeText(
+            target: .visual(x: 500, y: 500),
+            text: "unsafe"
+        ).validate()) == nil,
+        "typing must require a semantic target"
     )
 }

@@ -23,12 +23,10 @@ final class AppCoordinator {
     private let soundPlayer: SoundPlayer
     private let runtimes: [LocalAgentRuntime]
     private let modelCatalog = LocalAgentModelCatalog()
-    private let surfaceRouter: TakeoverSurfaceRouter
     private let takeover: TakeoverCoordinator
 
     private var requestTask: Task<Void, Never>?
     private var settingsTask: Task<Void, Never>?
-    private var browserCloseTask: Task<Void, Never>?
     private var activeTakeoverRequest: TakeoverRequest?
     private var lastActivity: PetActivity = .idle
     private var lastMessage: String?
@@ -62,23 +60,17 @@ final class AppCoordinator {
         let capture = ScreenCaptureService(backend: screenBackend)
         let cleaner = CaptureArtifactCleaner()
         let semanticProvider = BrowserAccessibilityContextProvider()
-        let router = TakeoverSurfaceRouter(
-            nativeCapture: capture,
-            nativeSemantics: semanticProvider,
-            nativeExecutor: CGEventScreenActionExecutor(
-                semanticProvider: semanticProvider
-            )
-        )
-        surfaceRouter = router
         takeover = TakeoverCoordinator(
-            capture: router,
+            capture: capture,
             responder: LocalAgentResponder(
                 runtimes: runtimes,
                 skillURL: skillURL
             ),
             cleaner: cleaner,
-            executor: router,
-            semanticProvider: router
+            executor: CGEventScreenActionExecutor(
+                semanticProvider: semanticProvider
+            ),
+            semanticProvider: semanticProvider
         )
         soundPlayer = SoundPlayer(
             resourceDirectory: Self.soundResourceDirectory()
@@ -132,8 +124,6 @@ final class AppCoordinator {
         settings.hide()
         bubble.hide()
         pet.hide()
-        scheduleBrowserClose()
-        await waitForBrowserClose()
     }
 
     private func wireActions() {
@@ -246,8 +236,6 @@ final class AppCoordinator {
 
     private func startSession(task: String?) async {
         do {
-            await waitForBrowserClose()
-            surfaceRouter.useNative()
             let display = try await loadSelectedDisplay()
             if !preferencesStore.takeoverEnabled {
                 let question = Self.normalizedAnswerQuestion(task)
@@ -266,29 +254,13 @@ final class AppCoordinator {
             bubble.hide()
             NSApp.deactivate()
             try await Task.sleep(nanoseconds: 120_000_000)
-            let browserChannel = PlaywrightBrowserChannel.channel(
-                bundleIdentifier: NSWorkspace.shared.frontmostApplication?
-                    .bundleIdentifier
-            )
-            let preparationMessage = if browserChannel != nil {
-                "正在检查 Playwright 与当前浏览器的连接…"
-            } else {
-                "当前前台不是可附着浏览器，正在准备原生屏幕模式…"
-            }
             pet.show(on: nsScreen(for: display.id))
             bubble.showWorking(
-                previousMessage: preparationMessage,
+                previousMessage: "正在绑定当前前台窗口…",
                 preferences: preferencesStore.assistantPreferences,
                 takeoverEnabled: true,
                 petFrame: pet.panel.frame,
                 screen: pet.panel.screen
-            )
-            let browserPreparationStartedAt = Date()
-            let browserPreparation = try await surfaceRouter.prepareBrowser(
-                attachingTo: browserChannel
-            )
-            let browserPreparationSeconds = Date().timeIntervalSince(
-                browserPreparationStartedAt
             )
             let request = takeoverRequest(displayID: display.id, task: task)
             activeTakeoverRequest = request
@@ -298,19 +270,9 @@ final class AppCoordinator {
             settings.hide()
             pet.setClickThrough(true)
             pet.show(on: nsScreen(for: request.displayID))
-            let duration = String(
-                format: "%.1f",
-                browserPreparationSeconds
-            )
-            let initialMessage = switch browserPreparation {
-            case .attached:
-                "已连接当前浏览器标签页，使用 Playwright DOM 接管；准备耗时 \(duration) 秒。"
-            case let .unavailable(reason):
-                "Playwright 未连接：\(reason)。本轮已切换到 Accessibility 和截图操作；准备耗时 \(duration) 秒。"
-            }
             await takeover.start(
                 request,
-                initialMessage: initialMessage
+                initialMessage: "已绑定当前前台窗口；本轮只使用 Accessibility 和全屏观察。"
             )
         } catch is CancellationError {
             return
@@ -344,7 +306,6 @@ final class AppCoordinator {
             activeTakeoverRequest = nil
             updateMenu()
         }
-        scheduleBrowserClose()
     }
 
     private func handleSession(_ snapshot: TakeoverSnapshot) {
@@ -627,9 +588,6 @@ final class AppCoordinator {
     ) {
         requestTask = nil
         activeTakeoverRequest = nil
-        surfaceRouter.useNative()
-        scheduleBrowserClose()
-
         pet.setClickThrough(false)
         setActivity(activity)
         isShowingAnswerHistory = false
@@ -692,17 +650,6 @@ final class AppCoordinator {
             ).prefix(4_000)
         )
         return value.isEmpty ? nil : value
-    }
-
-    private func scheduleBrowserClose() {
-        guard browserCloseTask == nil else { return }
-        browserCloseTask = Task { await surfaceRouter.closeBrowser() }
-    }
-
-    private func waitForBrowserClose() async {
-        guard let task = browserCloseTask else { return }
-        await task.value
-        browserCloseTask = nil
     }
 
     private func showFailure(

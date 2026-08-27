@@ -67,12 +67,12 @@ private final class ActionGroupSurface:
         displayID: UInt32
     ) async throws {
         switch action {
-        case let .typeText(target, text, replaces):
+        case let .typeText(target, text):
             guard case let .element(elementID) = target,
                   elementID == snapshot?.elements.first(where: { $0.label == "Message" })?.id
             else { throw PetFailure.semanticTargetUnavailable }
             resolvedElementIDs.append(elementID)
-            inputValue = replaces ? text : inputValue + text
+            inputValue = text
         case let .click(target):
             guard case let .element(elementID) = target,
                   elementID == snapshot?.elements.first(where: { $0.label == "Send" })?.id
@@ -158,8 +158,7 @@ private final class ActionGroupResponder: AIResponder {
                     role: .textField,
                     label: SemanticTextMatcher("Message")
                 )),
-                text: "changed context",
-                replacesExistingText: true
+                text: "changed context"
             ))))
             results.append(await screenToolHandler(.activateAndVerify(.init(
                 targetLocator: send,
