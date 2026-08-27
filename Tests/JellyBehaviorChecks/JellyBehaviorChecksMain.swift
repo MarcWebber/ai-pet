@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import JellyCore
 import JellyMac
@@ -45,6 +46,31 @@ private final class StubCleaner: CaptureCleaning {
     func remove(_ artifact: CaptureArtifact) {}
 }
 
+private final class FullDisplayCaptureProbe: ScreenCapturingBackend {
+    private(set) var request: (displayID: UInt32, maximumDimension: Int)?
+
+    func availableDisplays() async throws -> [DisplayDescriptor] { [] }
+
+    func captureFullDisplay(
+        displayID: UInt32,
+        maximumDimension: Int
+    ) async throws -> CGImage {
+        request = (displayID, maximumDimension)
+        guard let context = CGContext(
+            data: nil,
+            width: 2,
+            height: 2,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let image = context.makeImage() else {
+            throw PetFailure.captureFailed
+        }
+        return image
+    }
+}
+
 @MainActor
 private final class StubExecutor: ScreenActionExecuting {
     func execute(
@@ -65,6 +91,37 @@ private enum JellyBehaviorChecksMain {
         runTakeoverProgressMonitorChecks()
         runHumanTypingChecks()
         await runActionGroupToolChecks()
+
+        let captureProbe = FullDisplayCaptureProbe()
+        let captureService = ScreenCaptureService(backend: captureProbe)
+        let captureArtifact = try await captureService.capture(displayID: 73)
+        defer { CaptureArtifactCleaner().remove(captureArtifact) }
+        check(
+            captureProbe.request?.displayID == 73
+                && captureProbe.request?.maximumDimension
+                    == AppMetadata.maximumScreenshotDimension,
+            "screen capture must request one exact full display without a region"
+        )
+        check(
+            FileManager.default.fileExists(atPath: captureArtifact.imageURL.path),
+            "full-display capture must produce a PNG artifact"
+        )
+        if ProcessInfo.processInfo.environment["JELLY_VERIFY_LIVE_CAPTURE"] == "1" {
+            let liveBackend = ScreenKitBackend()
+            let displays = try await liveBackend.availableDisplays()
+            guard let display = displays.first(where: \.isPrimary)
+                ?? displays.first else {
+                throw PetFailure.noDisplaysAvailable
+            }
+            let image = try await liveBackend.captureFullDisplay(
+                displayID: display.id,
+                maximumDimension: AppMetadata.maximumScreenshotDimension
+            )
+            check(
+                image.width > 0 && image.height > 0,
+                "live full-display capture must return a non-empty image"
+            )
+        }
 
         check(
             BrowserSemanticPolicy.isCodeEditorCandidate(
@@ -110,6 +167,14 @@ private enum JellyBehaviorChecksMain {
                 && playwrightSnapshot?.elements.first?.value == "print(1)"
                 && playwrightSnapshot?.elements[1].value == "checked",
             "Playwright snapshots must preserve page identity, values and refs"
+        )
+        let emptyEditorSnapshot = PlaywrightSnapshotParser.parse(
+            yaml: "- textbox \"Code editor\": \"\" [ref=e1] [box=0,0,800,600]",
+            commandOutput: ""
+        )
+        check(
+            emptyEditorSnapshot?.elements.first?.value == "",
+            "empty editors must remain distinguishable from unreadable editors"
         )
         check(
             PlaywrightBrowserChannel.channel(

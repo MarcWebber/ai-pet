@@ -22,6 +22,63 @@ public struct HumanTypingStroke: Codable, Equatable, Sendable {
     }
 }
 
+public enum HumanTextEdit: Equatable, Sendable {
+    case currentTextUnavailable
+    case unchanged
+    case append(String)
+    case replaceAll(String)
+    case replaceRange(
+        prefixCount: Int,
+        removedCount: Int,
+        suffixCount: Int,
+        replacement: String
+    )
+}
+
+public enum HumanTextEditPlan {
+    public static func make(
+        currentText: String?,
+        desiredText: String,
+        replacesExistingText: Bool
+    ) -> HumanTextEdit {
+        let desired = normalize(desiredText)
+        guard replacesExistingText else { return .append(desired) }
+        guard let currentText else { return .currentTextUnavailable }
+        let current = normalize(currentText)
+        guard current != desired else { return .unchanged }
+        guard !current.isEmpty else { return .append(desired) }
+
+        let old = Array(current), new = Array(desired)
+        let sharedLimit = min(old.count, new.count)
+        var prefixCount = 0
+        while prefixCount < sharedLimit,
+              old[prefixCount] == new[prefixCount] {
+            prefixCount += 1
+        }
+        var suffixCount = 0
+        while suffixCount < sharedLimit - prefixCount,
+              old[old.count - suffixCount - 1]
+                == new[new.count - suffixCount - 1] {
+            suffixCount += 1
+        }
+        guard prefixCount > 0 || suffixCount > 0 else {
+            return .replaceAll(desired)
+        }
+        let replacementEnd = new.count - suffixCount
+        return .replaceRange(
+            prefixCount: prefixCount,
+            removedCount: old.count - prefixCount - suffixCount,
+            suffixCount: suffixCount,
+            replacement: String(new[prefixCount..<replacementEnd])
+        )
+    }
+
+    public static func normalize(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+}
+
 public enum HumanTypingPlan {
     public static func strokes(
         for text: String,

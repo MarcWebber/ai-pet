@@ -255,15 +255,30 @@ final class BubblePanelController: NSObject {
         let betaFits = rowBounds.insetBy(dx: -1, dy: -1)
             .contains(betaFrame)
         let accessibilityLabel = takeoverSwitch.accessibilityLabel()
+        updateTakeoverAppearance(enabled: false, active: false)
+        let offTitle = takeoverTitle.stringValue
+        updateTakeoverAppearance(enabled: true, active: false)
+        let onTitle = takeoverTitle.stringValue
+        let onColor = takeoverTitle.textColor
+        updateTakeoverAppearance(enabled: true, active: true)
+        let activeTitle = takeoverTitle.stringValue
+        let activeColor = takeoverTitle.textColor
+        updateTakeoverAppearance(enabled: true, active: false)
         let passed = rowBounds.width >= 360
             && rowBounds.height >= 20
             && switchFits
             && betaFits
             && switchFrame.width >= 30
             && accessibilityLabel == "屏幕接管"
+            && offTitle == "接管已关闭"
+            && onTitle == "接管已开启"
+            && activeTitle == "接管进行中"
+            && onColor?.isEqual(NSColor.systemGreen) == true
+            && activeColor?.isEqual(NSColor.systemOrange) == true
+            && takeoverRow.layer?.borderWidth == 1
         return (
             passed,
-            "row=\(Int(rowBounds.width))×\(Int(rowBounds.height)), switch=\(Int(switchFrame.minX)),\(Int(switchFrame.minY)) \(Int(switchFrame.width))×\(Int(switchFrame.height)) fits=\(switchFits), beta=\(Int(betaFrame.minX)),\(Int(betaFrame.minY)) \(Int(betaFrame.width))×\(Int(betaFrame.height)) fits=\(betaFits), label=\(accessibilityLabel ?? "nil")"
+            "row=\(Int(rowBounds.width))×\(Int(rowBounds.height)), switch=\(Int(switchFrame.minX)),\(Int(switchFrame.minY)) \(Int(switchFrame.width))×\(Int(switchFrame.height)) fits=\(switchFits), beta=\(Int(betaFrame.minX)),\(Int(betaFrame.minY)) \(Int(betaFrame.width))×\(Int(betaFrame.height)) fits=\(betaFits), states=\(offTitle)/\(onTitle)/\(activeTitle), label=\(accessibilityLabel ?? "nil")"
         )
     }
 
@@ -319,6 +334,10 @@ final class BubblePanelController: NSObject {
                 ? "快速退出：\(takeoverShortcutLabel) · 或关闭开关"
                 : "开始后按 \(takeoverShortcutLabel) 快速退出"
             : "开启后果冻可以操作当前屏幕"
+        updateTakeoverAppearance(
+            enabled: takeoverEnabled,
+            active: working && purpose == .takeover && takeoverEnabled
+        )
         working ? spinner.startAnimation(nil) : spinner.stopAnimation(nil)
         spinner.isHidden = !working
         panel.ignoresMouseEvents = ignoresMouse
@@ -414,6 +433,8 @@ final class BubblePanelController: NSObject {
         takeoverBeta.layer?.borderColor = NSColor.systemOrange
             .withAlphaComponent(0.30).cgColor
         takeoverSwitch.setAccessibilityLabel("屏幕接管")
+        takeoverSwitch.wantsLayer = true
+        takeoverSwitch.layer?.cornerRadius = 11
         takeoverSwitch.target = self
         takeoverSwitch.action = #selector(takeoverChanged)
         let takeoverTitleLine = stack(
@@ -429,6 +450,15 @@ final class BubblePanelController: NSObject {
         takeoverRow.orientation = .horizontal
         takeoverRow.alignment = .centerY
         takeoverRow.spacing = 7
+        takeoverRow.edgeInsets = NSEdgeInsets(
+            top: 6,
+            left: 8,
+            bottom: 6,
+            right: 6
+        )
+        takeoverRow.wantsLayer = true
+        takeoverRow.layer?.cornerRadius = 10
+        takeoverRow.layer?.borderWidth = 1
         let takeoverTrailingPadding = NSView()
         [takeoverTitle, takeoverHint].forEach {
             $0.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -497,6 +527,33 @@ final class BubblePanelController: NSObject {
         stack.alignment = orientation == .horizontal ? .centerY : .leading
         stack.spacing = spacing
         return stack
+    }
+
+    private func updateTakeoverAppearance(enabled: Bool, active: Bool) {
+        let accent: NSColor
+        if active {
+            takeoverTitle.stringValue = "接管进行中"
+            accent = .systemOrange
+        } else if enabled {
+            takeoverTitle.stringValue = "接管已开启"
+            accent = .systemGreen
+        } else {
+            takeoverTitle.stringValue = "接管已关闭"
+            accent = .secondaryLabelColor
+        }
+        takeoverTitle.textColor = accent
+        takeoverSwitch.setAccessibilityValue(
+            active ? "进行中" : enabled ? "已开启" : "已关闭"
+        )
+        takeoverSwitch.layer?.backgroundColor = accent
+            .withAlphaComponent(active ? 0.20 : enabled ? 0.14 : 0.04)
+            .cgColor
+        takeoverRow.layer?.backgroundColor = accent
+            .withAlphaComponent(active ? 0.15 : enabled ? 0.10 : 0.05)
+            .cgColor
+        takeoverRow.layer?.borderColor = accent
+            .withAlphaComponent(active ? 0.42 : enabled ? 0.30 : 0.16)
+            .cgColor
     }
 
     private func timeline(

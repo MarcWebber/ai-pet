@@ -870,7 +870,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "定位输入目标并给出完整最终文本；优先使用稳定 locator。JellyPet 会用真实键盘节奏逐字输入，包含自然停顿和少量立即退格纠正，不使用整段填充或粘贴。",
+                "定位输入目标并给出完整最终文本；优先使用稳定 locator。JellyPet 会保留编辑器中未变化的起始代码，只对差异范围逐字输入，包含自然停顿和少量立即退格纠正；读不到现有内容时会拒绝清空。",
                 schema(
                     properties: [
                         "target": targetSchema,

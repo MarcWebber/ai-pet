@@ -39,4 +39,58 @@ func runHumanTypingChecks() {
         short.allSatisfy { $0.mistypedText == nil },
         "short form values should not be forced to contain a fake mistake"
     )
+
+    let starter = """
+    class Solution {
+        public:
+            int solve(int value) {
+                return 0;
+            }
+    };
+    """
+    let completed = """
+    class Solution {
+        public:
+            int solve(int value) {
+                // Keep the provided wrapper and only finish the method.
+                return value + 1;
+            }
+    };
+    """
+    let edit = HumanTextEditPlan.make(
+        currentText: starter,
+        desiredText: completed,
+        replacesExistingText: true
+    )
+    if case let .replaceRange(prefix, removed, suffix, replacement) = edit {
+        let old = Array(starter), new = Array(completed)
+        let replayed = String(old[..<prefix]) + replacement
+            + String(old[(old.count - suffix)...])
+        check(
+            prefix > "class Solution {".count
+                && suffix > 0
+                && removed < old.count
+                && !replacement.contains("class Solution")
+                && replayed == String(new),
+            "starter code must be preserved while only the changed range is typed"
+        )
+    } else {
+        check(false, "starter code should produce a minimal replacement range")
+    }
+    check(
+        HumanTextEditPlan.make(
+            currentText: completed,
+            desiredText: completed,
+            replacesExistingText: true
+        ) == .unchanged,
+        "identical editor content must not be typed again"
+    )
+    check(
+        HumanTextEditPlan.make(
+            currentText: nil,
+            desiredText: completed,
+            replacesExistingText: true
+        ) == .currentTextUnavailable,
+        "unknown editor content must stop instead of deleting starter code"
+    )
 }

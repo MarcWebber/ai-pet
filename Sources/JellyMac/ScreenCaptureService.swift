@@ -8,7 +8,10 @@ import UniformTypeIdentifiers
 
 public protocol ScreenCapturingBackend: AnyObject {
     func availableDisplays() async throws -> [DisplayDescriptor]
-    func capture(displayID: UInt32, maximumDimension: Int) async throws -> CGImage
+    func captureFullDisplay(
+        displayID: UInt32,
+        maximumDimension: Int
+    ) async throws -> CGImage
 }
 
 public final class ScreenCaptureService: CaptureService {
@@ -26,7 +29,7 @@ public final class ScreenCaptureService: CaptureService {
     public func capture(displayID: UInt32) async throws -> CaptureArtifact {
         let image: CGImage
         do {
-            image = try await backend.capture(
+            image = try await backend.captureFullDisplay(
                 displayID: displayID,
                 maximumDimension: AppMetadata.maximumScreenshotDimension
             )
@@ -69,18 +72,28 @@ public final class ScreenKitBackend: ScreenCapturingBackend {
     public init() {}
 
     public func availableDisplays() async throws -> [DisplayDescriptor] {
-        try await content().displays.enumerated().map { index, display in
+        try onlineDisplayIDs().enumerated().map { index, displayID in
             DisplayDescriptor(
-                id: display.displayID,
-                name: CGDisplayIsBuiltin(display.displayID) != 0
+                id: displayID,
+                name: CGDisplayIsBuiltin(displayID) != 0
                     ? "内建显示器" : "显示器 \(index + 1)",
-                width: display.width, height: display.height,
-                isPrimary: CGDisplayIsMain(display.displayID) != 0
+                width: CGDisplayPixelsWide(displayID),
+                height: CGDisplayPixelsHigh(displayID),
+                isPrimary: CGDisplayIsMain(displayID) != 0
             )
         }
     }
 
-    public func capture(displayID: UInt32, maximumDimension: Int) async throws -> CGImage {
+    public func captureFullDisplay(
+        displayID: UInt32,
+        maximumDimension: Int
+    ) async throws -> CGImage {
+        guard CGPreflightScreenCaptureAccess() else {
+            throw PetFailure.screenCapturePermissionRequired
+        }
+        let picker = SCContentSharingPicker.shared
+        picker.isActive = false
+        defer { picker.isActive = false }
         let shareable: SCShareableContent
         do { shareable = try await content() }
         catch { throw PetFailure.captureFailed }
@@ -106,6 +119,19 @@ public final class ScreenKitBackend: ScreenCapturingBackend {
                 contentFilter: filter, configuration: configuration
             )
         } catch { throw PetFailure.captureFailed }
+    }
+
+    private func onlineDisplayIDs() throws -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success,
+              count > 0 else {
+            throw PetFailure.noDisplaysAvailable
+        }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else {
+            throw PetFailure.noDisplaysAvailable
+        }
+        return Array(ids.prefix(Int(count)))
     }
 
     private func content() async throws -> SCShareableContent {

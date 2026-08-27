@@ -128,7 +128,7 @@ public enum PlaywrightSnapshotParser {
         let raw = valueTail[..<boundary].trimmingCharacters(
             in: .whitespacesAndNewlines
         )
-        guard !raw.isEmpty else { return nil }
+        guard !raw.isEmpty else { return "" }
         if raw.count >= 2, raw.first == "\"", raw.last == "\"" {
             return String(raw.dropFirst().dropLast())
         }
@@ -341,6 +341,7 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
                 _ = try await code("await page.mouse.click(\(point.x), \(point.y), { clickCount: \(count) });")
             }
         case let .typeText(target, text, replaces):
+            let currentText = semanticValue(for: target, snapshot: snapshot)
             if let ref = try ref(target, snapshot) {
                 _ = try await command(["click", ref])
             } else {
@@ -349,7 +350,11 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
                     "await page.mouse.click(\(point.x), \(point.y));"
                 )
             }
-            try await typeHumanly(text, replacing: replaces)
+            try await applyHumanEdit(
+                text,
+                replacing: replaces,
+                currentText: currentText
+            )
         case let .drag(fromX, fromY, toX, toY, duration):
             let from = point(fromX, fromY), to = point(toX, toY)
             _ = try await code("await page.mouse.move(\(from.x), \(from.y)); await page.mouse.down(); await page.mouse.move(\(to.x), \(to.y), { steps: \(max(12, min(60, duration / 16))) }); await page.mouse.up();")
@@ -381,6 +386,14 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
         return elementID
     }
 
+    private func semanticValue(
+        for target: ScreenActionTarget,
+        snapshot: SemanticSnapshot?
+    ) -> String? {
+        guard case let .element(elementID) = target else { return nil }
+        return snapshot?.elements.first(where: { $0.id == elementID })?.value
+    }
+
     private func point(_ target: ScreenActionTarget) throws -> (x: Int, y: Int) {
         guard case let .visual(x, y) = target else { throw PetFailure.invalidScreenAction }
         return point(x, y)
@@ -403,13 +416,54 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
         return (prefix + [value]).joined(separator: "+")
     }
 
+    private func applyHumanEdit(
+        _ text: String,
+        replacing: Bool,
+        currentText: String?
+    ) async throws {
+        switch HumanTextEditPlan.make(
+            currentText: currentText,
+            desiredText: text,
+            replacesExistingText: replacing
+        ) {
+        case .currentTextUnavailable:
+            throw PetFailure.editorTextUnavailable
+        case .unchanged:
+            return
+        case let .append(value):
+            try await typeHumanly(value, replacing: false)
+        case let .replaceAll(value):
+            try await typeHumanly(value, replacing: true)
+        case let .replaceRange(prefix, removed, suffix, replacement):
+            let selection: String
+            if prefix <= suffix {
+                selection = """
+                await page.keyboard.press('Meta+ArrowUp');
+                for (let i = 0; i < \(prefix); i++) await page.keyboard.press('ArrowRight');
+                for (let i = 0; i < \(removed); i++) await page.keyboard.press('Shift+ArrowRight');
+                """
+            } else {
+                selection = """
+                await page.keyboard.press('Meta+ArrowDown');
+                for (let i = 0; i < \(suffix); i++) await page.keyboard.press('ArrowLeft');
+                for (let i = 0; i < \(removed); i++) await page.keyboard.press('Shift+ArrowLeft');
+                """
+            }
+            _ = try await code(selection, timeout: 30)
+            if replacement.isEmpty {
+                if removed > 0 { _ = try await command(["press", "Backspace"]) }
+            } else {
+                try await typeHumanly(replacement, replacing: false)
+            }
+        }
+    }
+
     private func typeHumanly(
         _ text: String,
         replacing: Bool
     ) async throws {
         let strokes = HumanTypingPlan.strokes(
-            for: text.replacingOccurrences(of: "\r\n", with: "\n")
-                .replacingOccurrences(of: "\r", with: "\n"),
+            for: HumanTextEditPlan.normalize(text),
             seed: UInt64.random(in: 1...UInt64.max)
         )
         let encoded = try JSONEncoder().encode(strokes)

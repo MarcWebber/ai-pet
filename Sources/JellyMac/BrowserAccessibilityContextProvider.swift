@@ -78,7 +78,7 @@ public enum BrowserSemanticPolicy {
             $0.value == 10 || $0.value == 9 ? String($0)
                 : CharacterSet.controlCharacters.contains($0) ? " " : String($0)
         }.joined()
-        return clean.isEmpty ? nil : String(clean.prefix(4_000))
+        return String(clean.prefix(100_000))
     }
 
     public static func pageURL(_ value: String?) -> String? {

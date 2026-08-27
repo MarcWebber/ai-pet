@@ -37,10 +37,15 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 duration: duration
             )
         case let .typeText(target, text, replaces):
+            let observedText = semanticValue(for: target, snapshot: snapshot)
             let point = try coordinate(target, snapshot, in: bounds)
             try click(at: point, count: 1); try await pause(120)
             try click(at: point, count: 1); try await pause(120)
-            try await insert(text, replacing: replaces)
+            try await insert(
+                text,
+                replacing: replaces,
+                currentText: observedText ?? focusedTextValue()
+            )
         case let .keyPress(key, modifiers):
             try keyPress(key, modifiers)
         case let .navigate(url):
@@ -126,6 +131,46 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
             // observation before reaching a platform executor.
             throw PetFailure.semanticTargetUnavailable
         }
+    }
+
+    private func semanticValue(
+        for target: ScreenActionTarget,
+        snapshot: SemanticSnapshot?
+    ) -> String? {
+        guard case let .element(elementID) = target else { return nil }
+        return snapshot?.elements.first(where: { $0.id == elementID })?.value
+    }
+
+    private func focusedTextValue() -> String? {
+        let system = AXUIElementCreateSystemWide()
+        var focusedValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            system,
+            kAXFocusedUIElementAttribute as CFString,
+            &focusedValue
+        ) == .success,
+              let focusedValue,
+              CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        let focused = unsafeBitCast(focusedValue, to: AXUIElement.self)
+        var rawValue: CFTypeRef?, subroleValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            focused,
+            kAXValueAttribute as CFString,
+            &rawValue
+        ) == .success,
+              let value = rawValue as? String else { return nil }
+        _ = AXUIElementCopyAttributeValue(
+            focused,
+            kAXSubroleAttribute as CFString,
+            &subroleValue
+        )
+        return BrowserSemanticPolicy.safeValue(
+            role: .textField,
+            subrole: subroleValue as? String,
+            value: value
+        )
     }
 
     private func onlineBounds(_ displayID: UInt32) throws -> CGRect {
@@ -218,14 +263,68 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         }
     }
 
-    private func insert(_ text: String, replacing: Bool) async throws {
-        if replacing {
+    private func insert(
+        _ text: String,
+        replacing: Bool,
+        currentText: String?
+    ) async throws {
+        switch HumanTextEditPlan.make(
+            currentText: currentText,
+            desiredText: text,
+            replacesExistingText: replacing
+        ) {
+        case .currentTextUnavailable:
+            throw PetFailure.editorTextUnavailable
+        case .unchanged:
+            return
+        case let .append(value):
+            try await type(value)
+        case let .replaceAll(value):
             try keyPress(.a, [.command]); try await pause(90)
             try keyPress(.delete, []); try await pause(120)
+            try await type(value)
+        case let .replaceRange(prefix, removed, suffix, replacement):
+            try await selectTextRange(
+                prefixCount: prefix,
+                removedCount: removed,
+                suffixCount: suffix
+            )
+            if replacement.isEmpty {
+                if removed > 0 { try keyPress(.delete, []) }
+            } else {
+                try await type(replacement)
+            }
         }
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        try await type(normalized)
+    }
+
+    private func selectTextRange(
+        prefixCount: Int,
+        removedCount: Int,
+        suffixCount: Int
+    ) async throws {
+        if prefixCount <= suffixCount {
+            try keyPress(.up, [.command]); try await pause(70)
+            try await repeatKey(.right, count: prefixCount)
+            try await repeatKey(.right, modifiers: [.shift], count: removedCount)
+        } else {
+            try keyPress(.down, [.command]); try await pause(70)
+            try await repeatKey(.left, count: suffixCount)
+            try await repeatKey(.left, modifiers: [.shift], count: removedCount)
+        }
+        try await pause(90)
+    }
+
+    private func repeatKey(
+        _ key: ScreenKey,
+        modifiers: [KeyModifier] = [],
+        count: Int
+    ) async throws {
+        guard count > 0 else { return }
+        for index in 0..<count {
+            try Task.checkCancellation()
+            try keyPress(key, modifiers)
+            if index % 20 == 19 { try await pause(18) }
+        }
     }
 
     private func emit(_ text: String) throws {
