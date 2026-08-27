@@ -7,12 +7,19 @@ import JellyCore
 @MainActor
 public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     private let semanticProvider: BrowserAccessibilityContextProvider
+    private let typingSpeedPercent: () -> Int
     private let source = CGEventSource(stateID: .privateState)
     private let mouseLock = NSLock()
     private var activeMouseUpPoint: CGPoint?
 
-    public init(semanticProvider: BrowserAccessibilityContextProvider) {
+    public init(
+        semanticProvider: BrowserAccessibilityContextProvider,
+        typingSpeedPercent: @escaping () -> Int = {
+            HumanTypingPlan.defaultSpeedPercent
+        }
+    ) {
         self.semanticProvider = semanticProvider
+        self.typingSpeedPercent = typingSpeedPercent
     }
 
     public func execute(
@@ -37,10 +44,10 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 duration: duration
             )
         case let .typeText(target, text):
-            guard let observedText = semanticValue(
+            guard semanticValue(
                 for: target,
                 snapshot: snapshot
-            ) else {
+            ) != nil else {
                 throw PetFailure.editorTextUnavailable
             }
             let focusedElement = try await focusTextTarget(
@@ -48,11 +55,7 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 snapshot: snapshot,
                 bounds: bounds
             )
-            try await insert(
-                text,
-                currentText: observedText,
-                focusedElement: focusedElement
-            )
+            try await insert(text, focusedElement: focusedElement)
         case let .keyPress(key, modifiers):
             try keyPress(key, modifiers)
         case let .navigate(url):
@@ -329,7 +332,8 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     ) async throws {
         let strokes = HumanTypingPlan.strokes(
             for: text,
-            seed: UInt64.random(in: 1...UInt64.max)
+            seed: UInt64.random(in: 1...UInt64.max),
+            speedPercent: typingSpeedPercent()
         )
         var index = 0
         while index < strokes.count {
@@ -484,31 +488,59 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
 
     private func insert(
         _ text: String,
-        currentText: String?,
         focusedElement: AXUIElement
     ) async throws {
-        switch HumanTextEditPlan.make(
-            currentText: currentText,
-            desiredText: text
-        ) {
-        case .currentTextUnavailable:
-            throw PetFailure.editorTextUnavailable
-        case .existingTextProtected:
-            throw PetFailure.existingEditorTextProtected
-        case .unchanged:
-            return
-        case let .append(value):
-            try await type(value, focusedElement: focusedElement)
-        case let .insertAtBoundary(prefix, suffix, value):
-            try await moveToTextBoundary(
-                prefixCount: prefix,
-                suffixCount: suffix,
-                focusedElement: focusedElement
+        let desired = HumanTextEditPlan.normalize(text)
+        var stableReads = 0
+        for _ in 0..<4 {
+            try ensureFocused(focusedElement)
+            let current = HumanTextEditPlan.normalize(
+                try editorText(focusedElement)
             )
-            if !value.isEmpty {
+            switch HumanTextEditPlan.make(
+                currentText: current,
+                desiredText: desired
+            ) {
+            case .currentTextUnavailable:
+                throw PetFailure.editorTextUnavailable
+            case .existingTextProtected:
+                throw PetFailure.existingEditorTextProtected
+            case .unchanged:
+                stableReads += 1
+                if stableReads >= 2 { return }
+            case let .append(value):
+                stableReads = 0
                 try await type(value, focusedElement: focusedElement)
+            case let .insertAtBoundary(prefix, suffix, value):
+                stableReads = 0
+                try await moveToTextBoundary(
+                    prefixCount: prefix,
+                    suffixCount: suffix,
+                    focusedElement: focusedElement
+                )
+                if !value.isEmpty {
+                    try await type(value, focusedElement: focusedElement)
+                }
             }
+            try await pause(300)
         }
+        guard HumanTextEditPlan.normalize(try editorText(focusedElement))
+            == desired else {
+            throw PetFailure.existingEditorTextProtected
+        }
+    }
+
+    private func editorText(_ element: AXUIElement) throws -> String {
+        var rawValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            element,
+            kAXValueAttribute as CFString,
+            &rawValue
+        ) == .success,
+              let value = rawValue as? String else {
+            throw PetFailure.editorTextUnavailable
+        }
+        return value
     }
 
     private func moveToTextBoundary(

@@ -80,9 +80,14 @@ public enum HumanTextEditPlan {
 }
 
 public enum HumanTypingPlan {
+    public static let minimumSpeedPercent = 40
+    public static let maximumSpeedPercent = 160
+    public static let defaultSpeedPercent = 80
+
     public static func strokes(
         for text: String,
-        seed: UInt64
+        seed: UInt64,
+        speedPercent: Int = defaultSpeedPercent
     ) -> [HumanTypingStroke] {
         var random = TypingRandom(seed: seed)
         var eligibleUntilMistake = random.value(in: 72...132)
@@ -102,14 +107,32 @@ public enum HumanTypingPlan {
             return HumanTypingStroke(
                 text: value,
                 mistypedText: mistyped,
-                mistakeDelayMilliseconds: random.value(in: 85...180),
-                correctionDelayMilliseconds: random.value(in: 60...135),
-                delayAfterMilliseconds: delay(
-                    after: character,
-                    random: &random
+                mistakeDelayMilliseconds: scaled(
+                    random.value(in: 85...180),
+                    for: speedPercent
+                ),
+                correctionDelayMilliseconds: scaled(
+                    random.value(in: 60...135),
+                    for: speedPercent
+                ),
+                delayAfterMilliseconds: scaled(
+                    delay(after: character, random: &random),
+                    for: speedPercent
                 )
             )
         }
+    }
+
+    public static func normalizedSpeedPercent(_ value: Int) -> Int {
+        min(max(value, minimumSpeedPercent), maximumSpeedPercent)
+    }
+
+    private static func scaled(_ milliseconds: Int, for speedPercent: Int) -> Int {
+        let speed = normalizedSpeedPercent(speedPercent)
+        return max(
+            1,
+            Int((Double(milliseconds) * 100 / Double(speed)).rounded())
+        )
     }
 
     private static func delay(

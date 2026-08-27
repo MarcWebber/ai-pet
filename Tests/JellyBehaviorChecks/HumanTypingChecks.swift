@@ -3,6 +3,11 @@ import JellyCore
 func runHumanTypingChecks() {
     let source = String(repeating: "int answer = value + 1; // update\n", count: 12)
     let strokes = HumanTypingPlan.strokes(for: source, seed: 42)
+    let baseline = HumanTypingPlan.strokes(
+        for: source,
+        seed: 42,
+        speedPercent: 100
+    )
     check(
         strokes.count == source.count
             && strokes.allSatisfy { $0.text.count == 1 },
@@ -14,11 +19,28 @@ func runHumanTypingChecks() {
     )
     check(
         strokes.allSatisfy {
-            (45...360).contains($0.delayAfterMilliseconds)
-                && (85...180).contains($0.mistakeDelayMilliseconds)
-                && (60...135).contains($0.correctionDelayMilliseconds)
+            (56...450).contains($0.delayAfterMilliseconds)
+                && (106...225).contains($0.mistakeDelayMilliseconds)
+                && (75...169).contains($0.correctionDelayMilliseconds)
         },
         "typing and correction delays must stay inside the natural preset"
+    )
+    check(
+        zip(strokes, baseline).allSatisfy {
+            $0.delayAfterMilliseconds > $1.delayAfterMilliseconds
+        },
+        "the default configured typing speed must be slightly slower than baseline"
+    )
+    let faster = HumanTypingPlan.strokes(
+        for: source,
+        seed: 42,
+        speedPercent: 140
+    )
+    check(
+        zip(faster, baseline).allSatisfy {
+            $0.delayAfterMilliseconds < $1.delayAfterMilliseconds
+        },
+        "raising the configured percentage must make typing faster"
     )
 
     var visible = ""
@@ -107,6 +129,17 @@ func runHumanTypingChecks() {
             desiredText: "different code"
         ) == .existingTextProtected,
         "an unrelated final answer must never trigger replace-all"
+    )
+    check(
+        HumanTextEditPlan.make(
+            currentText: "class Solution {\n    return ;\n}",
+            desiredText: "class Solution {\n    return answer;\n}"
+        ) == .insertAtBoundary(
+            prefixCount: 28,
+            suffixCount: 3,
+            text: "answer"
+        ),
+        "a contiguous fragment deleted during typing must be resumed at the gap"
     )
     check(
         (try? ScreenAction.keyPress(key: .delete, modifiers: []).validate()) == nil

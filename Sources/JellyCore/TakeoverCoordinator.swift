@@ -13,13 +13,16 @@ public final class TakeoverCoordinator {
     public var canFollowUp: Bool { answerPreferences != nil }
 
     private struct Session {
+        static let maximumActions = 60
+
         let request: TakeoverRequest
         var currentSnapshot: SemanticSnapshot?
         var hasScreenshot = false
         var sequence = 0
-        var progress = TakeoverProgressMonitor()
+        var actionCount = 0
+        var observationCount = 0
         var terminalStopReason: String?
-        var uncertainActivationSignatures: [String: UInt64] = [:]
+        var uncertainActivationSignatures: [String: Int] = [:]
         let startedAt = Date()
     }
 
@@ -333,12 +336,24 @@ public final class TakeoverCoordinator {
         return element.value == expectedValue
     }
 
-    private func semanticObservationSignature() -> UInt64? {
+    private func semanticObservationSignature() -> Int? {
         guard let snapshot = session?.currentSnapshot else { return nil }
-        return TakeoverObservationFingerprint(
-            snapshot: snapshot,
-            screenshotPNG: nil
-        ).semanticSignature
+        var hash = Hasher()
+        hash.combine(snapshot.applicationName)
+        hash.combine(snapshot.windowTitle)
+        hash.combine(snapshot.pageURL)
+        hash.combine(snapshot.readableText)
+        for element in snapshot.elements {
+            hash.combine(element.role.rawValue)
+            hash.combine(element.label)
+            hash.combine(element.value)
+            hash.combine(element.frame.x)
+            hash.combine(element.frame.y)
+            hash.combine(element.frame.width)
+            hash.combine(element.frame.height)
+            hash.combine(element.isEnabled)
+        }
+        return hash.finalize()
     }
 
     private func resolvedActivationKey(
@@ -446,12 +461,7 @@ public final class TakeoverCoordinator {
                 throw PetFailure.captureFailed
             }
 
-            let progressDecision = session?.progress.recordObservation(
-                snapshot: semantics,
-                screenshotPNG: screenshot
-            )
-                ?? .proceed
-
+            session?.observationCount += 1
             session?.currentSnapshot = semantics
             session?.hasScreenshot = screenshot != nil
             let details = semantics.map(render) ?? "没有可用的语义结构，已返回当前截图。"
@@ -461,52 +471,19 @@ public final class TakeoverCoordinator {
             )
             trace(
                 .observing,
-                "第 \(session?.progress.observationCount ?? 1) 次观察完成 · \(duration)",
+                "第 \(session?.observationCount ?? 1) 次观察完成 · \(duration)",
                 kind: .observation,
                 sequence: sequence,
                 details: details
             )
-            switch progressDecision {
-            case .proceed:
-                break
-            case let .warning(warning):
-                trace(
-                    .verifying,
-                    "接管监管提醒",
-                    kind: .outcome,
-                    sequence: sequence,
-                    details: warning
-                )
-            case let .stop(reason):
-                session?.terminalStopReason = reason
-                trace(
-                    .failure,
-                    "接管监管已停止任务",
-                    kind: .outcome,
-                    sequence: sequence,
-                    details: reason
-                )
-                publish(.deciding, reason)
-                return ScreenToolResult(
-                    success: false,
-                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。",
-                    screenshotPNG: screenshot
-                )
-            }
             publish(.deciding, "观察结果已返回 Agent")
 
             let imageNote = screenshot == nil
                 ? "本次没有附带截图，请只使用当前元素 ID 定位。"
                 : "本次同时附带当前截图，可在没有语义元素时使用 0 到 1000 的视觉坐标。"
-            let progressNote: String
-            if case let .warning(warning) = progressDecision {
-                progressNote = "\n监管提醒：\(warning)"
-            } else {
-                progressNote = ""
-            }
             return ScreenToolResult(
                 success: true,
-                message: "当前界面：\n\(details)\n\(imageNote)\(progressNote)",
+                message: "当前界面：\n\(details)\n\(imageNote)",
                 screenshotPNG: screenshot
             )
         } catch is CancellationError {
@@ -558,8 +535,8 @@ public final class TakeoverCoordinator {
             let executableAction = try action.resolvingSemanticTargets(
                 in: current.currentSnapshot
             )
-            let progressDecision = session?.progress.recordAction() ?? .proceed
-            if case let .stop(reason) = progressDecision {
+            guard (session?.actionCount ?? 0) < Session.maximumActions else {
+                let reason = "连续操作已达到 \(Session.maximumActions) 次，接管已停止以避免失控。"
                 session?.terminalStopReason = reason
                 trace(
                     .failure,
@@ -574,6 +551,7 @@ public final class TakeoverCoordinator {
                     message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
                 )
             }
+            session?.actionCount += 1
             publish(.locating, "Agent 已选择 \(action.label)")
             trace(
                 .acting,
@@ -824,8 +802,8 @@ public final class TakeoverCoordinator {
         let metrics = session.map {
             TakeoverMetrics(
                 durationSeconds: Date().timeIntervalSince($0.startedAt),
-                actionCount: $0.progress.actionCount,
-                observationCount: $0.progress.observationCount
+                actionCount: $0.actionCount,
+                observationCount: $0.observationCount
             )
         }
         snapshot = TakeoverSnapshot(

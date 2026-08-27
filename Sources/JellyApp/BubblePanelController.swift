@@ -192,6 +192,8 @@ final class BubblePanelController: NSObject {
             size: showsActivityDetails
                 ? NSSize(width: 520, height: 400)
                 : NSSize(width: 390, height: 240),
+            inputPlaceholder: "页面有变化？告诉果冻继续检查…",
+            purpose: .takeover,
             takeoverEnabled: true,
             near: petFrame,
             on: screen

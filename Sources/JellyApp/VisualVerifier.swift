@@ -140,6 +140,7 @@ enum VisualVerifier {
             selectedDisplayID: 1,
             assistantPreferences: AssistantPreferences.default,
             showActivityDetails: true,
+            typingSpeedPercent: HumanTypingPlan.defaultSpeedPercent,
             globalShortcut: .controlOptionSpace,
             answerScrollShortcut: .controlOptionArrows,
             answerHistoryShortcut: .controlOptionArrows,

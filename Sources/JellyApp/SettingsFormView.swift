@@ -7,6 +7,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         case display(UInt32)
         case assistant(AssistantPreferences)
         case activityDetails(Bool)
+        case typingSpeed(Int)
         case shortcut(GlobalShortcut)
         case answerScrollShortcut(AnswerScrollShortcut)
         case answerHistoryShortcut(AnswerHistoryShortcut)
@@ -31,6 +32,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let historyField = NSTextField()
     private let historyStepper = NSStepper()
     private let activityDetails = NSSwitch()
+    private let typingSpeedField = NSTextField()
+    private let typingSpeedStepper = NSStepper()
     private let custom = NSTextView()
     private let customScroll = NSScrollView()
     private let shortcut = NSPopUpButton()
@@ -133,6 +136,10 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         select(state.answerScrollShortcut.rawValue, in: answerScrollShortcut)
         select(state.answerHistoryShortcut.rawValue, in: answerHistoryShortcut)
         activityDetails.state = state.showActivityDetails ? .on : .off
+        if typingSpeedField.currentEditor() == nil {
+            typingSpeedField.integerValue = state.typingSpeedPercent
+        }
+        typingSpeedStepper.integerValue = state.typingSpeedPercent
         if historyField.currentEditor() == nil {
             historyField.integerValue = state.assistantPreferences
                 .conversationHistoryTurns
@@ -222,6 +229,16 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         )
         answerHistoryShortcut.toolTip = "左箭头查看上一次回答，右箭头返回下一次回答。"
         configure(activityDetails, action: #selector(activityDetailsChanged))
+        typingSpeedField.delegate = self
+        typingSpeedField.alignment = .right
+        typingSpeedField.formatter = Self.typingSpeedFormatter()
+        typingSpeedStepper.minValue = Double(HumanTypingPlan.minimumSpeedPercent)
+        typingSpeedStepper.maxValue = Double(HumanTypingPlan.maximumSpeedPercent)
+        typingSpeedStepper.increment = 5
+        configure(
+            typingSpeedStepper,
+            action: #selector(typingSpeedStepperChanged)
+        )
 
         custom.delegate = self
         custom.isRichText = false
@@ -276,6 +293,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         styleTextField(modelField, color: .systemPurple)
         historyField.font = roundedFont(ofSize: 13, weight: .semibold)
         styleTextField(historyField, color: .systemPurple)
+        typingSpeedField.font = roundedFont(ofSize: 13, weight: .semibold)
+        styleTextField(typingSpeedField, color: .systemOrange)
         displayDetail.font = roundedFont(ofSize: 12, weight: .medium)
         runtimeStatus.font = roundedFont(ofSize: 12, weight: .medium)
         spriteStatus.font = roundedFont(ofSize: 12.5, weight: .semibold)
@@ -332,6 +351,11 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             NSView(),
             activityDetails
         ], .horizontal, 8)
+        let typingSpeedBlock = stack([
+            typingSpeedField,
+            typingSpeedStepper,
+            label("%（数值越低越慢）")
+        ], .horizontal, 7)
         let spriteButtons = stack(
             [chooseSprite, resetSprite],
             .horizontal,
@@ -387,6 +411,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             tint: .systemOrange,
             rows: [
                 row("过程详情", activityBlock),
+                row("渐入速度", typingSpeedBlock),
                 row("唤醒 / 停止", shortcut),
                 row("滚动回答", answerScrollShortcut),
                 row("切换回答", answerHistoryShortcut)
@@ -428,6 +453,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             customScroll.heightAnchor.constraint(equalToConstant: 104),
             modelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
             historyField.widthAnchor.constraint(equalToConstant: 64),
+            typingSpeedField.widthAnchor.constraint(equalToConstant: 64),
             done.widthAnchor.constraint(greaterThanOrEqualToConstant: 124),
             done.heightAnchor.constraint(equalToConstant: 38)
         ])
@@ -702,6 +728,14 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         onAction?(.activityDetails(activityDetails.state == .on))
     }
 
+    @objc private func typingSpeedStepperChanged() {
+        let value = HumanTypingPlan.normalizedSpeedPercent(
+            typingSpeedStepper.integerValue
+        )
+        typingSpeedField.integerValue = value
+        onAction?(.typingSpeed(value))
+    }
+
     @objc private func shortcutChanged() {
         if let value: GlobalShortcut = selected(shortcut) {
             onAction?(.shortcut(value))
@@ -752,6 +786,13 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             historyField.integerValue = value
             historyStepper.integerValue = value
             publishAssistant(historyTurns: value)
+        } else if field === typingSpeedField {
+            let value = HumanTypingPlan.normalizedSpeedPercent(
+                typingSpeedField.integerValue
+            )
+            typingSpeedField.integerValue = value
+            typingSpeedStepper.integerValue = value
+            onAction?(.typingSpeed(value))
         }
     }
 
@@ -865,6 +906,15 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         formatter.maximum = NSNumber(
             value: JellyConfiguration.Conversation.maximumHistoryTurns
         )
+        return formatter
+    }
+
+    private static func typingSpeedFormatter() -> NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.allowsFloats = false
+        formatter.minimum = NSNumber(value: HumanTypingPlan.minimumSpeedPercent)
+        formatter.maximum = NSNumber(value: HumanTypingPlan.maximumSpeedPercent)
         return formatter
     }
 }

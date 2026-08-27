@@ -9,6 +9,7 @@ public final class AppPreferencesStore {
         static let answerScrollShortcut = "jelly.answerScrollShortcut"
         static let answerHistoryShortcut = "jelly.answerHistoryShortcut"
         static let answerHistory = "jelly.answerHistory"
+        static let typingSpeedPercent = "jelly.typingSpeedPercent"
     }
 
     private let defaults: UserDefaults
@@ -30,7 +31,8 @@ public final class AppPreferencesStore {
             Key.answerScrollShortcut:
                 AnswerScrollShortcut.controlOptionArrows.rawValue,
             Key.answerHistoryShortcut:
-                AnswerHistoryShortcut.controlOptionArrows.rawValue
+                AnswerHistoryShortcut.controlOptionArrows.rawValue,
+            Key.typingSpeedPercent: HumanTypingPlan.defaultSpeedPercent
         ])
     }
 
@@ -186,5 +188,19 @@ public final class AppPreferencesStore {
     public var showActivityDetails: Bool {
         get { defaults.bool(forKey: Key.showActivityDetails) }
         set { defaults.set(newValue, forKey: Key.showActivityDetails) }
+    }
+
+    public var typingSpeedPercent: Int {
+        get {
+            HumanTypingPlan.normalizedSpeedPercent(
+                defaults.integer(forKey: Key.typingSpeedPercent)
+            )
+        }
+        set {
+            defaults.set(
+                HumanTypingPlan.normalizedSpeedPercent(newValue),
+                forKey: Key.typingSpeedPercent
+            )
+        }
     }
 }

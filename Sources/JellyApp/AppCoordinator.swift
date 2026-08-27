@@ -44,9 +44,10 @@ final class AppCoordinator {
             forResource: "JellyPetConfig",
             withExtension: "json"
         )
-        preferencesStore = AppPreferencesStore(
+        let preferences = AppPreferencesStore(
             configurationTemplateURL: configurationTemplateURL
         )
+        preferencesStore = preferences
         runtimes = LocalAgentRuntimeLocator.detect()
         let packagedSkill = Bundle.main.resourceURL?
             .appendingPathComponent("Skills/jellypet-takeover/SKILL.md")
@@ -68,7 +69,8 @@ final class AppCoordinator {
             ),
             cleaner: cleaner,
             executor: CGEventScreenActionExecutor(
-                semanticProvider: semanticProvider
+                semanticProvider: semanticProvider,
+                typingSpeedPercent: { preferences.typingSpeedPercent }
             ),
             semanticProvider: semanticProvider
         )
@@ -196,6 +198,8 @@ final class AppCoordinator {
                 }
                 self.refreshCurrentSettings()
             case let .activityDetails(value): self.preferencesStore.showActivityDetails = value
+            case let .typingSpeed(value):
+                self.preferencesStore.typingSpeedPercent = value
             case let .shortcut(value): self.changeShortcut(value)
             case let .answerScrollShortcut(value):
                 self.changeAnswerScrollShortcut(value)
@@ -768,6 +772,7 @@ final class AppCoordinator {
                 selectedDisplayID: preferencesStore.selectedDisplayID,
                 assistantPreferences: preferencesStore.assistantPreferences,
                 showActivityDetails: preferencesStore.showActivityDetails,
+                typingSpeedPercent: preferencesStore.typingSpeedPercent,
                 globalShortcut: preferencesStore.globalShortcut,
                 answerScrollShortcut:
                     preferencesStore.answerScrollShortcut,

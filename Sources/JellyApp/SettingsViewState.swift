@@ -6,6 +6,7 @@ struct SettingsViewState {
     let selectedDisplayID: UInt32?
     let assistantPreferences: AssistantPreferences
     let showActivityDetails: Bool
+    let typingSpeedPercent: Int
     let globalShortcut: GlobalShortcut
     let answerScrollShortcut: AnswerScrollShortcut
     let answerHistoryShortcut: AnswerHistoryShortcut

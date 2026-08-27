@@ -87,7 +87,6 @@ private enum JellyBehaviorChecksMain {
     @MainActor
     static func main() async throws {
         try runElementLocatorChecks()
-        runTakeoverProgressMonitorChecks()
         runHumanTypingChecks()
         await runActionGroupToolChecks()
 
@@ -222,6 +221,16 @@ private enum JellyBehaviorChecksMain {
             preferences.takeoverEnabled,
             "new installs must open in Beta takeover mode by default"
         )
+        check(
+            preferences.typingSpeedPercent
+                == HumanTypingPlan.defaultSpeedPercent,
+            "new installs must use the slightly slower human typing speed"
+        )
+        preferences.typingSpeedPercent = 120
+        check(
+            preferences.typingSpeedPercent == 120,
+            "typing speed must be configurable and persist in user settings"
+        )
         let legacyConfigurationURL = configurationRoot
             .appendingPathComponent("legacy-config.json")
         try """
@@ -276,8 +285,9 @@ private enum JellyBehaviorChecksMain {
                 && reloadedPreferences.assistantPreferences
                     .conversationHistoryTurns == 3
                 && reloadedPreferences.assistantPreferences
-                    .customInstructions == "先给结论",
-            "assistant and conversation settings must persist in config.json"
+                    .customInstructions == "先给结论"
+                && reloadedPreferences.typingSpeedPercent == 120,
+            "assistant, conversation and typing settings must persist"
         )
         let history = (0..<10).map { index in
             AnswerHistoryEntry(
