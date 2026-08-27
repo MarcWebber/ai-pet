@@ -24,14 +24,13 @@ public struct HumanTypingStroke: Codable, Equatable, Sendable {
 
 public enum HumanTextEdit: Equatable, Sendable {
     case currentTextUnavailable
+    case existingTextProtected
     case unchanged
     case append(String)
-    case replaceAll(String)
-    case replaceRange(
+    case insertAtBoundary(
         prefixCount: Int,
-        removedCount: Int,
         suffixCount: Int,
-        replacement: String
+        text: String
     )
 }
 
@@ -62,14 +61,17 @@ public enum HumanTextEditPlan {
             suffixCount += 1
         }
         guard prefixCount > 0 || suffixCount > 0 else {
-            return .replaceAll(desired)
+            return .existingTextProtected
+        }
+        let removedEnd = old.count - suffixCount
+        guard old[prefixCount..<removedEnd].allSatisfy(\.isWhitespace) else {
+            return .existingTextProtected
         }
         let replacementEnd = new.count - suffixCount
-        return .replaceRange(
+        return .insertAtBoundary(
             prefixCount: prefixCount,
-            removedCount: old.count - prefixCount - suffixCount,
             suffixCount: suffixCount,
-            replacement: String(new[prefixCount..<replacementEnd])
+            text: String(new[prefixCount..<replacementEnd])
         )
     }
 

@@ -13,7 +13,7 @@ final class AppCoordinator {
         category: "session"
     )
     private let preferencesStore: AppPreferencesStore
-    private let screenBackend = ScreenKitBackend()
+    private let screenBackend = ScreenCaptureCLIBackend()
     private let hotkey = CarbonHotkeyService()
     private let pet = PetPanelController()
     private let bubble = BubblePanelController()

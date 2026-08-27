@@ -107,7 +107,7 @@ private enum JellyBehaviorChecksMain {
             "full-display capture must produce a PNG artifact"
         )
         if ProcessInfo.processInfo.environment["JELLY_VERIFY_LIVE_CAPTURE"] == "1" {
-            let liveBackend = ScreenKitBackend()
+            let liveBackend = ScreenCaptureCLIBackend()
             let displays = try await liveBackend.availableDisplays()
             guard let display = displays.first(where: \.isPrimary)
                 ?? displays.first else {

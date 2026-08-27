@@ -428,51 +428,38 @@ final class PlaywrightBrowserSurface: CaptureService, ScreenActionExecuting {
         ) {
         case .currentTextUnavailable:
             throw PetFailure.editorTextUnavailable
+        case .existingTextProtected:
+            throw PetFailure.existingEditorTextProtected
         case .unchanged:
             return
         case let .append(value):
-            try await typeHumanly(value, replacing: false)
-        case let .replaceAll(value):
-            try await typeHumanly(value, replacing: true)
-        case let .replaceRange(prefix, removed, suffix, replacement):
-            let selection: String
+            try await typeHumanly(value)
+        case let .insertAtBoundary(prefix, suffix, value):
+            let movement: String
             if prefix <= suffix {
-                selection = """
+                movement = """
                 await page.keyboard.press('Meta+ArrowUp');
                 for (let i = 0; i < \(prefix); i++) await page.keyboard.press('ArrowRight');
-                for (let i = 0; i < \(removed); i++) await page.keyboard.press('Shift+ArrowRight');
                 """
             } else {
-                selection = """
+                movement = """
                 await page.keyboard.press('Meta+ArrowDown');
                 for (let i = 0; i < \(suffix); i++) await page.keyboard.press('ArrowLeft');
-                for (let i = 0; i < \(removed); i++) await page.keyboard.press('Shift+ArrowLeft');
                 """
             }
-            _ = try await code(selection, timeout: 30)
-            if replacement.isEmpty {
-                if removed > 0 { _ = try await command(["press", "Backspace"]) }
-            } else {
-                try await typeHumanly(replacement, replacing: false)
-            }
+            _ = try await code(movement, timeout: 30)
+            if !value.isEmpty { try await typeHumanly(value) }
         }
     }
 
-    private func typeHumanly(
-        _ text: String,
-        replacing: Bool
-    ) async throws {
+    private func typeHumanly(_ text: String) async throws {
         let strokes = HumanTypingPlan.strokes(
             for: HumanTextEditPlan.normalize(text),
             seed: UInt64.random(in: 1...UInt64.max)
         )
         let encoded = try JSONEncoder().encode(strokes)
         let plan = String(decoding: encoded, as: UTF8.self)
-        let reset = replacing
-            ? "await page.keyboard.press('Meta+A'); await page.waitForTimeout(90); await page.keyboard.press('Backspace'); await page.waitForTimeout(120);"
-            : ""
         let body = """
-        \(reset)
         const strokes = \(plan);
         const typeOne = async (value) => {
           if (/^[\\x20-\\x7E]$/.test(value)) await page.keyboard.type(value);

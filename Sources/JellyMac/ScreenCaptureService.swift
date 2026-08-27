@@ -1,9 +1,7 @@
 import CoreGraphics
-import Darwin
 import Foundation
 import ImageIO
 import JellyCore
-import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 public protocol ScreenCapturingBackend: AnyObject {
@@ -68,7 +66,7 @@ public final class CaptureArtifactCleaner: CaptureCleaning {
     }
 }
 
-public final class ScreenKitBackend: ScreenCapturingBackend {
+public final class ScreenCaptureCLIBackend: ScreenCapturingBackend {
     public init() {}
 
     public func availableDisplays() async throws -> [DisplayDescriptor] {
@@ -91,34 +89,29 @@ public final class ScreenKitBackend: ScreenCapturingBackend {
         guard CGPreflightScreenCaptureAccess() else {
             throw PetFailure.screenCapturePermissionRequired
         }
-        let picker = SCContentSharingPicker.shared
-        picker.isActive = false
-        defer { picker.isActive = false }
-        let shareable: SCShareableContent
-        do { shareable = try await content() }
-        catch { throw PetFailure.captureFailed }
-        guard let display = shareable.displays.first(where: { $0.displayID == displayID })
-        else { throw PetFailure.selectedDisplayUnavailable }
-        let ownID = Bundle.main.bundleIdentifier
-        let ownApps = shareable.applications.filter {
-            $0.processID == getpid() || $0.bundleIdentifier == ownID
-                || $0.bundleIdentifier == AppMetadata.bundleIdentifier
+        let displays = try onlineDisplayIDs()
+        guard let index = displays.firstIndex(of: displayID) else {
+            throw PetFailure.selectedDisplayUnavailable
         }
-        let filter = SCContentFilter(
-            display: display, excludingApplications: ownApps, exceptingWindows: []
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "JellyPet-FullDisplay-\(UUID().uuidString).png"
         )
-        let size = CaptureSizing.fit(
-            width: display.width, height: display.height,
-            maximumDimension: maximumDimension
-        )
-        let configuration = SCStreamConfiguration()
-        configuration.width = size.width; configuration.height = size.height
-        configuration.showsCursor = true; configuration.capturesAudio = false
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-C", "-D\(index + 1)", "-tpng", url.path]
         do {
-            return try await SCScreenshotManager.captureImage(
-                contentFilter: filter, configuration: configuration
-            )
-        } catch { throw PetFailure.captureFailed }
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            throw PetFailure.captureFailed
+        }
+        guard process.terminationStatus == 0,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { throw PetFailure.captureFailed }
+        return try scaled(image, maximumDimension: maximumDimension)
     }
 
     private func onlineDisplayIDs() throws -> [CGDirectDisplayID] {
@@ -134,9 +127,35 @@ public final class ScreenKitBackend: ScreenCapturingBackend {
         return Array(ids.prefix(Int(count)))
     }
 
-    private func content() async throws -> SCShareableContent {
-        try await SCShareableContent.excludingDesktopWindows(
-            false, onScreenWindowsOnly: true
+    private func scaled(
+        _ image: CGImage,
+        maximumDimension: Int
+    ) throws -> CGImage {
+        let size = CaptureSizing.fit(
+            width: image.width,
+            height: image.height,
+            maximumDimension: maximumDimension
         )
+        guard size.width != image.width || size.height != image.height else {
+            return image
+        }
+        guard let context = CGContext(
+            data: nil,
+            width: size.width,
+            height: size.height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { throw PetFailure.captureFailed }
+        context.interpolationQuality = .high
+        context.draw(
+            image,
+            in: CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        )
+        guard let result = context.makeImage() else {
+            throw PetFailure.captureFailed
+        }
+        return result
     }
 }

@@ -311,6 +311,7 @@ public final class TakeoverCoordinator {
     }
 
     private func refreshObservation(sequence: Int, token: UUID) async -> Bool {
+        if session?.currentSnapshot != nil { return true }
         let result = await observe(sequence: sequence, token: token)
         return result.success && session?.currentSnapshot != nil
     }
@@ -401,6 +402,12 @@ public final class TakeoverCoordinator {
     ) async -> ScreenToolResult {
         guard let current = session else {
             return ScreenToolResult(success: false, message: "会话已经结束。")
+        }
+        guard current.currentSnapshot == nil, !current.hasScreenshot else {
+            return ScreenToolResult(
+                success: false,
+                message: "当前界面已经观察过，且尚未执行新动作；为避免重复截图，本次 observe 已拒绝。请直接使用上一次观察结果。"
+            )
         }
         publish(.capturing, "Agent 正在观察当前界面")
         let startedAt = Date()

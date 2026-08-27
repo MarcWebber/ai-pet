@@ -6,6 +6,7 @@ public enum PetFailure: Error, Equatable, Sendable {
     case captureFailed
     case screenCapturePermissionRequired
     case editorTextUnavailable
+    case existingEditorTextProtected
     case agentRuntimeUnavailable(String)
     case agentRuntimeFailed(String, String)
     case invalidCodexOutput
@@ -31,6 +32,8 @@ extension PetFailure: LocalizedError {
             return "JellyPet 还没有屏幕录制权限。请先在系统设置的“隐私与安全性 → 屏幕与系统音频录制”中允许 JellyPet；本次不会打开选区截图。"
         case .editorTextUnavailable:
             return "无法读取编辑器里的现有内容。为避免清空起始代码，本次输入已停止；请重新观察并定位编辑器。"
+        case .existingEditorTextProtected:
+            return "最终代码会改动编辑器里的非空白原文。为保护起始代码，本次输入已停止；请保留原有签名和代码，只在空白处补全。"
         case let .agentRuntimeUnavailable(runtime):
             return "没有找到 \(runtime) 的本地 CLI，请在设置中选择已探测到的 Runtime。"
         case let .agentRuntimeFailed(runtime, message):

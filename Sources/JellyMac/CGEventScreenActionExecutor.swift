@@ -275,41 +275,31 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         ) {
         case .currentTextUnavailable:
             throw PetFailure.editorTextUnavailable
+        case .existingTextProtected:
+            throw PetFailure.existingEditorTextProtected
         case .unchanged:
             return
         case let .append(value):
             try await type(value)
-        case let .replaceAll(value):
-            try keyPress(.a, [.command]); try await pause(90)
-            try keyPress(.delete, []); try await pause(120)
-            try await type(value)
-        case let .replaceRange(prefix, removed, suffix, replacement):
-            try await selectTextRange(
+        case let .insertAtBoundary(prefix, suffix, value):
+            try await moveToTextBoundary(
                 prefixCount: prefix,
-                removedCount: removed,
                 suffixCount: suffix
             )
-            if replacement.isEmpty {
-                if removed > 0 { try keyPress(.delete, []) }
-            } else {
-                try await type(replacement)
-            }
+            if !value.isEmpty { try await type(value) }
         }
     }
 
-    private func selectTextRange(
+    private func moveToTextBoundary(
         prefixCount: Int,
-        removedCount: Int,
         suffixCount: Int
     ) async throws {
         if prefixCount <= suffixCount {
             try keyPress(.up, [.command]); try await pause(70)
             try await repeatKey(.right, count: prefixCount)
-            try await repeatKey(.right, modifiers: [.shift], count: removedCount)
         } else {
             try keyPress(.down, [.command]); try await pause(70)
             try await repeatKey(.left, count: suffixCount)
-            try await repeatKey(.left, modifiers: [.shift], count: removedCount)
         }
         try await pause(90)
     }

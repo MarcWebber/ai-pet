@@ -88,7 +88,9 @@ private final class ActionGroupSurface:
 }
 
 private final class ActionGroupResponder: AIResponder {
-    enum Scenario { case uncertainRepeat, verifiedRepeat, retryAfterChange }
+    enum Scenario {
+        case uncertainRepeat, verifiedRepeat, retryAfterChange, repeatedObserve
+    }
 
     private let scenario: Scenario
     private(set) var results: [ScreenToolResult] = []
@@ -106,6 +108,9 @@ private final class ActionGroupResponder: AIResponder {
             label: SemanticTextMatcher("Send")
         )
         switch scenario {
+        case .repeatedObserve:
+            results.append(await screenToolHandler(.observe))
+            results.append(await screenToolHandler(.observe))
         case .uncertainRepeat:
             let expected = SemanticElementLocator(
                 application: SemanticTextMatcher("Another App"),
@@ -201,6 +206,15 @@ private func runActionGroupScenario(
 
 @MainActor
 func runActionGroupToolChecks() async {
+    let observed = await runActionGroupScenario(.repeatedObserve)
+    check(
+        observed.responder.results.count == 2
+            && observed.responder.results[0].success
+            && !observed.responder.results[1].success
+            && observed.surface.generation == 1,
+        "a repeated observe without an intervening action must not capture again"
+    )
+
     let uncertain = await runActionGroupScenario(.uncertainRepeat)
     check(
         uncertain.responder.results.count == 2

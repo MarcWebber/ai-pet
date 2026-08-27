@@ -40,11 +40,12 @@ func runHumanTypingChecks() {
         "short form values should not be forced to contain a fake mistake"
     )
 
+    let blankBody = String(repeating: " ", count: 12)
     let starter = """
     class Solution {
         public:
             int solve(int value) {
-                return 0;
+    \(blankBody)
             }
     };
     """
@@ -62,17 +63,16 @@ func runHumanTypingChecks() {
         desiredText: completed,
         replacesExistingText: true
     )
-    if case let .replaceRange(prefix, removed, suffix, replacement) = edit {
+    if case let .insertAtBoundary(prefix, suffix, replacement) = edit {
         let old = Array(starter), new = Array(completed)
         let replayed = String(old[..<prefix]) + replacement
             + String(old[(old.count - suffix)...])
         check(
             prefix > "class Solution {".count
                 && suffix > 0
-                && removed < old.count
                 && !replacement.contains("class Solution")
                 && replayed == String(new),
-            "starter code must be preserved while only the changed range is typed"
+            "starter code must be preserved while the blank method body is typed"
         )
     } else {
         check(false, "starter code should produce a minimal replacement range")
@@ -92,5 +92,33 @@ func runHumanTypingChecks() {
             replacesExistingText: true
         ) == .currentTextUnavailable,
         "unknown editor content must stop instead of deleting starter code"
+    )
+    let nonBlankStarter = starter.replacingOccurrences(
+        of: "\(blankBody)\n",
+        with: "            return 0;\n"
+    )
+    check(
+        HumanTextEditPlan.make(
+            currentText: nonBlankStarter,
+            desiredText: completed,
+            replacesExistingText: true
+        ) == .existingTextProtected,
+        "non-blank starter code must never be deleted or replaced"
+    )
+    check(
+        HumanTextEditPlan.make(
+            currentText: "existing code",
+            desiredText: "different code",
+            replacesExistingText: true
+        ) == .existingTextProtected,
+        "an unrelated final answer must never trigger replace-all"
+    )
+    check(
+        (try? ScreenAction.keyPress(key: .delete, modifiers: []).validate()) == nil
+            && (try? ScreenAction.keyPress(
+                key: .a,
+                modifiers: [.command]
+            ).validate()) == nil,
+        "model-visible key presses must not expose delete or select-all"
     )
 }

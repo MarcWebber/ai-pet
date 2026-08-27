@@ -870,7 +870,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "定位输入目标并给出完整最终文本；优先使用稳定 locator。JellyPet 会保留编辑器中未变化的起始代码，只对差异范围逐字输入，包含自然停顿和少量立即退格纠正；读不到现有内容时会拒绝清空。",
+                "定位输入目标并给出完整最终文本；优先使用稳定 locator。必须原样保留编辑器已有的非空白代码，只能在空白位置逐字补全；任何删除或改写原代码的请求都会被拒绝。",
                 schema(
                     properties: [
                         "target": targetSchema,
@@ -902,7 +902,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "key_press",
-                "发送一个按键及可选的组合键。",
+                "发送一个非删除按键及可选组合键；不允许 Delete、Forward Delete 或 Command+A。",
                 schema(
                     properties: [
                         "key": [
