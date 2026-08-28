@@ -25,6 +25,6 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>果冻会把所选屏幕的临时截图交给你选择的本地 Agent Runtime 及其模型提供方分析，并在回复后删除本地截图。</string>
+    <string>果冻会把所选屏幕的临时截图交给本机 Codex 分析，并在回复后删除本地截图。</string>
 </dict>
 </plist>

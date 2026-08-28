@@ -13,7 +13,6 @@ test -f "$app/Contents/Resources/JellyPetConfig.json"
 jq -e '
   .schemaVersion == 2
   and .conversation.historyTurns == 8
-  and .assistant.runtime == "automatic"
   and .assistant.model == "auto"
   and .assistant.reasoningEffort == "high"
   and .beta.screenTakeover == true

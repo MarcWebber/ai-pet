@@ -5,8 +5,7 @@ public struct JellyConfiguration: Codable, Equatable, Sendable {
     public static let `default` = JellyConfiguration(
         conversation: Conversation(historyTurns: 8),
         assistant: Assistant(
-            runtime: .automatic,
-            model: AssistantPreferences.automaticModel,
+            model: AssistantPreferences.defaultModel,
             reasoningEffort: .high,
             customInstructions: ""
         ),
@@ -69,18 +68,15 @@ public struct JellyConfiguration: Codable, Equatable, Sendable {
     }
 
     public struct Assistant: Codable, Equatable, Sendable {
-        public var runtime: AgentRuntimeKind
         public var model: String
         public var reasoningEffort: ReasoningEffort
         public var customInstructions: String
 
         public init(
-            runtime: AgentRuntimeKind,
             model: String,
             reasoningEffort: ReasoningEffort,
             customInstructions: String
         ) {
-            self.runtime = runtime
             self.model = model
             self.reasoningEffort = reasoningEffort
             self.customInstructions = customInstructions
@@ -90,7 +86,7 @@ public struct JellyConfiguration: Codable, Equatable, Sendable {
         public mutating func normalize() {
             let value = model.trimmingCharacters(in: .whitespacesAndNewlines)
             model = value.isEmpty
-                ? AssistantPreferences.automaticModel
+                ? AssistantPreferences.defaultModel
                 : String(value.prefix(200))
             customInstructions = String(customInstructions.prefix(4_000))
         }

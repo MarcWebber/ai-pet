@@ -144,9 +144,8 @@ enum VisualVerifier {
             globalShortcut: .controlOptionSpace,
             answerScrollShortcut: .controlOptionArrows,
             answerHistoryShortcut: .controlOptionArrows,
-            availableRuntimes: [.codex, .claudeCode],
             modelOptions: ["gpt-5.6-luna"],
-            runtimeText: "已找到 Codex 与 Claude Code",
+            codexStatusText: "已连接 Codex · /opt/homebrew/bin/codex",
             configurationURL: URL(
                 fileURLWithPath: "/Users/me/Library/Application Support/JellyPet/config.json"
             ),

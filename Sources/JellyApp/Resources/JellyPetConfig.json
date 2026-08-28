@@ -4,7 +4,6 @@
     "historyTurns" : 8
   },
   "assistant" : {
-    "runtime" : "automatic",
     "model" : "auto",
     "reasoningEffort" : "high",
     "customInstructions" : ""

@@ -13,7 +13,6 @@ public struct CaptureArtifact: Equatable, Sendable {
 public struct CodexRequest: Equatable, Sendable {
     public let imageURL: URL?
     public let prompt: String
-    public let runtime: AgentRuntimeKind
     public let model: String
     public let reasoningEffort: ReasoningEffort
     public let conversationHistoryTurns: Int
@@ -21,14 +20,12 @@ public struct CodexRequest: Equatable, Sendable {
     public init(
         imageURL: URL?,
         prompt: String,
-        runtime: AgentRuntimeKind = .automatic,
         model: String,
         reasoningEffort: ReasoningEffort,
         conversationHistoryTurns: Int = 8
     ) {
         self.imageURL = imageURL
         self.prompt = prompt
-        self.runtime = runtime
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.conversationHistoryTurns = min(

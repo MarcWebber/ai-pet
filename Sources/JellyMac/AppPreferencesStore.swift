@@ -56,7 +56,6 @@ public final class AppPreferencesStore {
         get {
             let configuration = configurationStore.configuration
             return AssistantPreferences(
-                runtime: configuration.assistant.runtime,
                 model: configuration.assistant.model,
                 reasoningEffort:
                     configuration.assistant.reasoningEffort,
@@ -69,7 +68,6 @@ public final class AppPreferencesStore {
         set {
             let previousTurns = conversationHistoryTurns
             configurationStore.update { configuration in
-                configuration.assistant.runtime = newValue.runtime
                 configuration.assistant.model = newValue.model
                 configuration.assistant.reasoningEffort =
                     newValue.reasoningEffort

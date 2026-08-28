@@ -2,26 +2,27 @@ import Foundation
 import JellyCore
 
 public final class CodexProcessResponder: AIResponder {
+    public static let suggestedModels = [
+        "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol",
+        "gpt-5.5", "gpt-5.4"
+    ]
+
     private let appServer: CodexAppServerClient?
-    private let runtime: AgentRuntimeKind
     private var completedTurns = 0
     private var configuration: String?
     private var history: [String] = []
 
     public init(
         executableURL: URL?,
-        runtime: AgentRuntimeKind = .codex,
         skillURL: URL?,
         temporaryRoot: URL = FileManager.default.temporaryDirectory
     ) {
-        self.runtime = runtime
         self.appServer = executableURL.flatMap { executableURL in
             guard let skillURL,
                   FileManager.default.isReadableFile(atPath: skillURL.path)
             else { return nil }
             return CodexAppServerClient(
                 executableURL: executableURL,
-                runtime: runtime,
                 skillURL: skillURL,
                 workingDirectory: temporaryRoot.appendingPathComponent(
                     "JellyPet-Codex-Isolated-\(UUID().uuidString)",
@@ -37,7 +38,7 @@ public final class CodexProcessResponder: AIResponder {
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
         guard let appServer else {
-            throw PetFailure.agentRuntimeUnavailable(runtime.displayName)
+            throw PetFailure.codexUnavailable
         }
 
         let currentConfiguration = [
@@ -64,7 +65,6 @@ public final class CodexProcessResponder: AIResponder {
                 当前请求：
                 \(request.prompt)
                 """,
-                runtime: request.runtime,
                 model: request.model,
                 reasoningEffort: request.reasoningEffort,
                 conversationHistoryTurns: request.conversationHistoryTurns
@@ -96,28 +96,22 @@ public final class CodexProcessResponder: AIResponder {
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as CodexAppServerError {
-            throw Self.failure(for: error, runtime: runtime)
+            throw Self.failure(for: error)
         } catch {
-            throw PetFailure.agentRuntimeFailed(
-                runtime.displayName,
-                error.localizedDescription
-            )
+            throw PetFailure.codexFailed(error.localizedDescription)
         }
     }
 
     public func steer(_ instruction: String) async throws {
         guard let appServer else {
-            throw PetFailure.agentRuntimeUnavailable(runtime.displayName)
+            throw PetFailure.codexUnavailable
         }
         do {
             try await appServer.steer(instruction)
         } catch let error as CodexAppServerError {
-            throw Self.failure(for: error, runtime: runtime)
+            throw Self.failure(for: error)
         } catch {
-            throw PetFailure.agentRuntimeFailed(
-                runtime.displayName,
-                error.localizedDescription
-            )
+            throw PetFailure.codexFailed(error.localizedDescription)
         }
     }
 
@@ -151,19 +145,44 @@ public final class CodexProcessResponder: AIResponder {
     }
 
     private static func failure(
-        for error: CodexAppServerError,
-        runtime: AgentRuntimeKind
+        for error: CodexAppServerError
     ) -> PetFailure {
         switch error {
         case let .startup(message), let .disconnected(message):
             if let message,
                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return .agentRuntimeFailed(runtime.displayName, message)
+                return .codexFailed(message)
             }
-            return .agentRuntimeUnavailable(runtime.displayName)
+            return .codexUnavailable
         case let .server(message):
-            return .agentRuntimeFailed(runtime.displayName, message)
+            return .codexFailed(message)
         case .invalidResponse: return .invalidCodexOutput
         }
+    }
+}
+
+public enum CodexExecutableLocator {
+    public static func locate(
+        fileManager: FileManager = .default,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+        let home = fileManager.homeDirectoryForCurrentUser
+        let pathDirectories = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map { URL(fileURLWithPath: String($0), isDirectory: true) }
+        let directories = pathDirectories + [
+            home.appendingPathComponent(".local/bin", isDirectory: true),
+            home.appendingPathComponent(".npm-global/bin", isDirectory: true),
+            URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
+            URL(fileURLWithPath: "/usr/local/bin", isDirectory: true)
+        ]
+        var seen = Set<String>()
+        return directories.lazy
+            .map { $0.appendingPathComponent("codex") }
+            .first { candidate in
+                let path = candidate.standardizedFileURL.path
+                return seen.insert(path).inserted
+                    && fileManager.isExecutableFile(atPath: path)
+            }
     }
 }

@@ -2,7 +2,7 @@
   <img src="./Resources/AppIcon-source.png" width="152" alt="JellyPet app icon">
   <h1>JellyPet · 果冻</h1>
   <p><strong>住在 macOS 桌面上的本地 AI 助手</strong></p>
-  <p>看懂屏幕、连续问答、调用你已经登录的 Agent CLI，也可以在 Beta 模式下观察并操作页面。</p>
+  <p>看懂屏幕、连续问答、调用你已经登录的 Codex，也可以在 Beta 模式下观察并操作页面。</p>
 
   <p>
     <a href="https://github.com/MarcWebber/ai-pet/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/MarcWebber/ai-pet?style=flat-square&amp;label=release&amp;color=C933E8"></a>
@@ -29,7 +29,7 @@
 </div>
 
 > [!NOTE]
-> JellyPet 不提供模型账号，也不会把 Runtime 的认证信息打包进应用。它复用本机已经安装并登录的 Agent CLI；普通截图问答只会在你主动触发时观察屏幕。
+> JellyPet 不提供模型账号，也不会把 Codex 的认证信息打包进应用。它复用本机已经安装并登录的 Codex CLI；普通截图问答只会在你主动触发时观察屏幕。
 
 ## 界面预览
 
@@ -42,10 +42,10 @@
     </td>
     <td width="52%" valign="top">
       <h3>一个地方，调好整只果冻</h3>
-      <p>当前设置页由四组粉彩卡片组成，运行引擎、模型、记忆轮数、外形和快捷键都能直接调整。</p>
+      <p>当前设置页由四组粉彩卡片组成，模型、记忆轮数、外形和快捷键都能直接调整。</p>
       <ul>
         <li><strong>屏幕观察</strong>：选择截图问答和接管观察的显示器。</li>
-        <li><strong>Agent 大脑</strong>：自动探测 Runtime，配置模型、思考强度和自定义指令。</li>
+        <li><strong>Codex</strong>：显示本机连接状态，并配置模型、思考强度和自定义指令。</li>
         <li><strong>果冻外形</strong>：导入一张 8×8 PNG，替换全部状态动画。</li>
         <li><strong>显示与快捷键</strong>：调整过程详情，并配置唤醒、滚动和历史切换。</li>
       </ul>
@@ -56,9 +56,9 @@
 
 ## 核心能力
 
-| 📸 截图问答 | 🧠 连续上下文 | 🧩 本地 Runtime |
+| 📸 截图问答 | 🧠 连续上下文 | 🧩 本机 Codex |
 | --- | --- | --- |
-| 按页面顺序回答屏幕里全部可读问题，不只处理第一题。 | 再次截图或追问时复用最近对话，可保存 1–50 轮。 | 自动探测 Codex、TraeX、Claude Code 和 OpenCode。 |
+| 按页面顺序回答屏幕里全部可读问题，不只处理第一题。 | 再次截图或追问时复用最近对话，可保存 1–50 轮。 | 自动探测本机已安装并登录的 Codex CLI。 |
 | **⌨️ 全局快捷键** | **🎨 自定义外形** | **🖱️ 屏幕接管 · Beta** |
 | 鼠标不用移到窗口，也能滚动回答、切换历史和停止任务。 | 一张 8×8 透明 PNG 即可提供 8 种状态、每种 8 帧动画。 | 观察、点击、输入、滚动、拖动、导航，并在每一步后重新验证。 |
 
@@ -68,39 +68,26 @@
 flowchart LR
     A["点击果冻 / 全局快捷键"] --> B["截取选定显示器"]
     B --> C{"选择工作模式"}
-    C -->|截图问答| D["本地 Agent Runtime"]
+    C -->|截图问答| D["本机 Codex"]
     C -->|屏幕接管 Beta| E["观察 · 操作 · 验证"]
     E --> D
     D --> F["回答窗口 + 本地历史"]
 ```
 
-## 支持的 Agent Runtime
+## Codex
 
 <p>
   <img alt="Codex" src="https://img.shields.io/badge/Codex-app--server-111827?style=flat-square">
-  <img alt="TraeX" src="https://img.shields.io/badge/TraeX-app--server-5B8FF9?style=flat-square">
-  <img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-terminal-D97757?style=flat-square">
-  <img alt="OpenCode" src="https://img.shields.io/badge/OpenCode-terminal-22C55E?style=flat-square">
 </p>
 
-JellyPet 至少需要一种已安装且已登录的本地 Runtime：
-
-| Runtime | 命令 | 接入方式 | 屏幕接管 |
-| --- | --- | --- | --- |
-| Codex | `codex` | 常驻 app-server | 支持 |
-| TraeX | `traex`、`traecli` 或 `trae` | 常驻 app-server | Beta，待真实工具面验收 |
-| Claude Code | `claude` | 非交互终端适配 | 不支持，仅截图问答 |
-| OpenCode | `opencode` | 非交互终端适配 | 不支持，仅截图问答 |
-
-自动选择顺序为 Codex → TraeX → Claude Code → OpenCode。JellyPet 从当前
+JellyPet 只支持已安装且已登录的 Codex CLI，通过常驻 `codex app-server --stdio`
+完成截图问答和屏幕接管。JellyPet 从当前
 `PATH`、`~/.local/bin`、`~/.npm-global/bin`、`/opt/homebrew/bin` 和
-`/usr/local/bin` 探测命令，不再读取旧的专用路径变量或 App 内置 CLI 路径。
-`cc` 不再是 Claude Code 的别名，也永远不会被当作 Agent Runtime。选择 Claude Code 或
-OpenCode 时，开启接管会返回明确错误，不会启动另一套终端接管循环。
+`/usr/local/bin` 探测 `codex`，不保留其他运行时、自动选择或终端兜底链路。
 
 ## 快速开始
 
-1. 安装并登录至少一个受支持的 Agent CLI。
+1. 安装并登录 Codex CLI。
 2. 从 [Latest Release](https://github.com/MarcWebber/ai-pet/releases/latest) 下载最新的
    `JellyPet-<version>-macos.dmg`。
 3. 打开 DMG，将 **JellyPet** 拖入“应用程序”。
@@ -139,7 +126,6 @@ OpenCode 时，开启接管会返回明确错误，不会启动另一套终端�
     "historyTurns": 8
   },
   "assistant": {
-    "runtime": "automatic",
     "model": "auto",
     "reasoningEffort": "high",
     "customInstructions": ""
@@ -154,8 +140,7 @@ OpenCode 时，开启接管会返回明确错误，不会启动另一套终端�
 ```
 
 - `historyTurns`：模型上下文与本地回答历史的保留轮数，范围 1–50。
-- `runtime`：`automatic`、`codex`、`traex`、`claudeCode` 或 `openCode`。
-- `model`：`auto` 或 Runtime 支持的完整模型 ID。
+- `model`：`auto` 或 Codex 支持的完整模型 ID。
 - `reasoningEffort`：`low`、`medium`、`high` 或 `xhigh`。
 - `customInstructions`：最多 4000 个字符。
 - `spriteSheet`：相对配置目录或绝对路径的 PNG；设置页导入时会自动管理。
@@ -193,8 +178,8 @@ OpenCode 时，开启接管会返回明确错误，不会启动另一套终端�
 滚动、拖动和导航。开关状态会直接保存；接管执行期间关闭开关或使用唤醒快捷键都会
 立即停止。旧的 schema 1 配置会在首次读取时迁移到 schema 2，并默认打开接管。
 
-屏幕接管只走 Codex/TraeX app-server，并由 AI 加载同一份中文
-`jellypet-takeover/SKILL.md`。Claude Code/OpenCode 只用于截图问答。
+屏幕接管只走 Codex app-server，并由 AI 加载中文
+`jellypet-takeover/SKILL.md`。
 
 屏幕接管只有一条执行链：Accessibility 读取当前界面，系统全屏捕获负责视觉观察，
 CGEvent 执行鼠标和逐键输入。不附着浏览器调试端口，也不在失败后切换另一套实现。
@@ -229,7 +214,7 @@ CGEvent 执行鼠标和逐键输入。不附着浏览器调试端口，也不在
 
 ## 从源码构建
 
-要求：macOS 14+、Swift 5.10 工具链，以及至少一种本地 Agent CLI。
+要求：macOS 14+、Swift 5.10 工具链，以及已安装并登录的 Codex CLI。
 
 ```bash
 bash scripts/build-app.sh
@@ -252,16 +237,13 @@ swift run --disable-sandbox JellyBehaviorChecks
 ## 代码结构
 
 - `Sources/JellyCore/`：配置模型、回答提示、动作和会话状态。
-- `Sources/JellyMac/`：配置存储、截图、Accessibility、浏览器、输入与 Runtime 适配。
+- `Sources/JellyMac/`：配置存储、截图、Accessibility、浏览器、输入与 Codex 连接。
 - `Sources/JellyApp/`：应用生命周期、桌宠、聊天框、设置页和快捷键。
 - `Tests/JellyBehaviorChecks/`：不打开桌面的核心行为检查。
 
 ## 当前限制
 
 - 公测包尚未使用 Developer ID 签名与 notarization。
-- Claude Code 和 OpenCode 的非交互参数可能随 CLI 版本变化；OpenCode 截图问答的内置
-  工具边界仍需真实验收。
-- TraeX 接管的内置工具面尚未像 Codex 一样完成逐项关闭和实测。
 - Beta 接管不属于稳定能力，浏览器扩展、远程桌面、DRM 内容、安全桌面和快速变化
   页面可能无法观察或操作。
 - 构建和无窗口行为检查不能替代真实桌面、真实模型与真实页面的端到端验收。

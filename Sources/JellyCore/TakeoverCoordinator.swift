@@ -64,7 +64,7 @@ public final class TakeoverCoordinator {
                 message: compact(initialMessage)
             ))
         }
-        publish(.deciding, "正在初始化本地 Agent Runtime 和屏幕工具")
+        publish(.deciding, "正在初始化 Codex 和屏幕工具")
         await responder.resetSession()
         guard token == generation, session != nil else { return }
 
@@ -82,7 +82,6 @@ public final class TakeoverCoordinator {
                 to: CodexRequest(
                     imageURL: nil,
                     prompt: prompt,
-                    runtime: request.assistantPreferences.runtime,
                     model: request.assistantPreferences.model,
                     reasoningEffort: request.assistantPreferences.reasoningEffort,
                     conversationHistoryTurns:
@@ -113,7 +112,7 @@ public final class TakeoverCoordinator {
                 .error,
                 nil,
                 error as? PetFailure
-                    ?? .agentRuntimeFailed("Agent", error.localizedDescription)
+                    ?? .codexFailed(error.localizedDescription)
             )
             session = nil
         }
@@ -725,7 +724,6 @@ public final class TakeoverCoordinator {
                 to: CodexRequest(
                     imageURL: imageURL,
                     prompt: prompt,
-                    runtime: preferences.runtime,
                     model: preferences.model,
                     reasoningEffort: preferences.reasoningEffort,
                     conversationHistoryTurns:
@@ -749,7 +747,7 @@ public final class TakeoverCoordinator {
                 .error,
                 nil,
                 error as? PetFailure
-                    ?? .agentRuntimeFailed("Agent", error.localizedDescription)
+                    ?? .codexFailed(error.localizedDescription)
             )
         }
     }

@@ -173,10 +173,9 @@ private enum JellyBehaviorChecksMain {
             "out-of-range tool arguments must be rejected before execution"
         )
         check(
-            AssistantPreferences.default.runtime == .automatic
-                && AssistantPreferences.default.model
-                    == AssistantPreferences.automaticModel,
-            "new installs must let the detected runtime choose its default model"
+            AssistantPreferences.default.model
+                == AssistantPreferences.defaultModel,
+            "new installs must use the Codex default model"
         )
         let questionPrompt = ResponsePrompts.screenAnalysis(
             question: "这个页面需要我做什么？",
@@ -238,7 +237,6 @@ private enum JellyBehaviorChecksMain {
           "schemaVersion": 1,
           "conversation": { "historyTurns": 8 },
           "assistant": {
-            "runtime": "automatic",
             "model": "auto",
             "reasoningEffort": "high",
             "customInstructions": ""
@@ -267,7 +265,6 @@ private enum JellyBehaviorChecksMain {
             "schema 1 installs must migrate the new default takeover mode once"
         )
         preferences.assistantPreferences = AssistantPreferences(
-            runtime: .claudeCode,
             model: "sonnet",
             reasoningEffort: .medium,
             customInstructions: "先给结论",
@@ -278,8 +275,7 @@ private enum JellyBehaviorChecksMain {
             configurationURL: configurationURL
         )
         check(
-            reloadedPreferences.assistantPreferences.runtime == .claudeCode
-                && reloadedPreferences.assistantPreferences.model == "sonnet"
+            reloadedPreferences.assistantPreferences.model == "sonnet"
                 && reloadedPreferences.assistantPreferences.reasoningEffort
                     == .medium
                 && reloadedPreferences.assistantPreferences
@@ -327,8 +323,7 @@ private enum JellyBehaviorChecksMain {
             executor: StubExecutor()
         )
         let screenPreferences = AssistantPreferences(
-            runtime: .automatic,
-            model: AssistantPreferences.automaticModel,
+            model: AssistantPreferences.defaultModel,
             reasoningEffort: .high,
             conversationHistoryTurns: 3
         )
@@ -359,92 +354,52 @@ private enum JellyBehaviorChecksMain {
         )
         defaults.removePersistentDomain(forName: defaultsName)
 
-        let fakeRuntimeRoot = FileManager.default.temporaryDirectory
+        let fakeCodexRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "JellyPet-Fake-Runtime-\(UUID().uuidString)",
+                "JellyPet-Fake-Codex-\(UUID().uuidString)",
                 isDirectory: true
             )
         try FileManager.default.createDirectory(
-            at: fakeRuntimeRoot,
+            at: fakeCodexRoot,
             withIntermediateDirectories: true
         )
-        defer { try? FileManager.default.removeItem(at: fakeRuntimeRoot) }
-        let fakeCC = fakeRuntimeRoot.appendingPathComponent("cc")
+        defer { try? FileManager.default.removeItem(at: fakeCodexRoot) }
+        let fakeCodex = fakeCodexRoot.appendingPathComponent("codex")
         try "#!/bin/sh\nexit 0\n".write(
-            to: fakeCC,
+            to: fakeCodex,
             atomically: true,
             encoding: .utf8
         )
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o700],
-            ofItemAtPath: fakeCC.path
+            ofItemAtPath: fakeCodex.path
         )
-        let detectedWithoutClaude = LocalAgentRuntimeLocator.detect(
-            environment: [
-                "PATH": fakeRuntimeRoot.path,
-                "JELLY_CLAUDE_PATH": fakeCC.path
-            ]
+        let locatedCodex = CodexExecutableLocator.locate(
+            environment: ["PATH": fakeCodexRoot.path]
         )
         check(
-            detectedWithoutClaude.allSatisfy { $0.commandName != "cc" },
-            "cc must never be treated as a Claude Code alias"
-        )
-        let fakeClaude = fakeRuntimeRoot.appendingPathComponent("claude")
-        try """
-        #!/bin/sh
-        while IFS= read -r line; do :; done
-        printf '%s\\n' '{"is_error":false,"result":"FAKE_AGENT_OK"}'
-        """.write(to: fakeClaude, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: fakeClaude.path
-        )
-        let terminalResponder = TerminalAgentResponder(
-            runtime: LocalAgentRuntime(
-                kind: .claudeCode,
-                executableURL: fakeClaude,
-                commandName: "claude"
-            ),
-            temporaryRoot: fakeRuntimeRoot
-        )
-        let terminalAnswer = try await terminalResponder.respond(
-            to: CodexRequest(
-                imageURL: nil,
-                prompt: "fake terminal adapter probe",
-                runtime: .claudeCode,
-                model: AssistantPreferences.automaticModel,
-                reasoningEffort: .low
-            ),
-            onTextDelta: { _ in },
-            screenToolHandler: nil
-        )
-        check(
-            terminalAnswer == "FAKE_AGENT_OK",
-            "terminal runtimes must launch, receive stdin and decode their result"
+            locatedCodex?.standardizedFileURL == fakeCodex.standardizedFileURL,
+            "Codex must be located from PATH"
         )
 
-        if let requested = ProcessInfo.processInfo.environment[
-            "JELLY_REAL_AGENT_SMOKE"
-        ], let kind = AgentRuntimeKind(rawValue: requested) {
-            let runtimes = LocalAgentRuntimeLocator.detect()
-            guard let runtime = runtimes.first(where: { $0.kind == kind }) else {
-                fputs("FAILED: requested runtime \(requested) was not detected\n", stderr)
+        if ProcessInfo.processInfo.environment["JELLY_REAL_CODEX_SMOKE"] == "1" {
+            guard let executableURL = CodexExecutableLocator.locate() else {
+                fputs("FAILED: Codex was not detected\n", stderr)
                 exit(EXIT_FAILURE)
             }
             let skillURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent(
                     "Sources/JellyApp/Resources/Skills/jellypet-takeover/SKILL.md"
                 )
-            let liveResponder = LocalAgentResponder(
-                runtimes: [runtime],
+            let liveResponder = CodexProcessResponder(
+                executableURL: executableURL,
                 skillURL: skillURL
             )
             let answer = try await liveResponder.respond(
                 to: CodexRequest(
                     imageURL: nil,
-                    prompt: "这是 JellyPet 0.9.2 Runtime 连通性测试。只回复 JELLY_RUNTIME_OK。",
-                    runtime: kind,
-                    model: AssistantPreferences.automaticModel,
+                    prompt: "这是 JellyPet 0.9.2 Codex 连通性测试。只回复 JELLY_CODEX_OK。",
+                    model: AssistantPreferences.defaultModel,
                     reasoningEffort: .low
                 ),
                 onTextDelta: { _ in },
@@ -452,8 +407,8 @@ private enum JellyBehaviorChecksMain {
             )
             check(
                 answer.trimmingCharacters(in: .whitespacesAndNewlines)
-                    == "JELLY_RUNTIME_OK",
-                "the selected local Agent Runtime must complete a real model round trip"
+                    == "JELLY_CODEX_OK",
+                "Codex must complete a real model round trip"
             )
             await liveResponder.resetSession()
         }

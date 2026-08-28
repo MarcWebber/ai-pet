@@ -72,7 +72,6 @@ actor CodexAppServerClient {
     }
 
     private let executableURL: URL
-    private let runtime: AgentRuntimeKind
     private let sourceSkillURL: URL
     private let workingDirectory: URL
     private var process: Process?
@@ -97,12 +96,10 @@ actor CodexAppServerClient {
 
     init(
         executableURL: URL,
-        runtime: AgentRuntimeKind = .codex,
         skillURL: URL,
         workingDirectory: URL
     ) {
         self.executableURL = executableURL
-        self.runtime = runtime
         self.sourceSkillURL = skillURL
         self.workingDirectory = workingDirectory
     }
@@ -322,7 +319,7 @@ actor CodexAppServerClient {
                 : "你是 JellyPet 的屏幕问答助手。只回答用户的问题，不执行界面操作、文件修改或外部命令。",
             "config": ["model_reasoning_effort": request.reasoningEffort.rawValue]
         ]
-        if request.model != AssistantPreferences.automaticModel {
+        if request.model != AssistantPreferences.defaultModel {
             params["model"] = request.model
         }
         if enablesScreenTools {
@@ -652,23 +649,15 @@ actor CodexAppServerClient {
     }
 
     private var arguments: [String] {
-        switch runtime {
-        case .traex:
-            return [
-                "app-server", "--listen", "stdio://",
-                "--config", "mcp_servers={}"
-            ]
-        default:
-            return [
-                "app-server", "--stdio",
-                "--disable", "apps",
-                "--disable", "goals",
-                "--disable", "multi_agent",
-                "--disable", "shell_tool",
-                "--disable", "plugins",
-                "--config", "mcp_servers={}"
-            ]
-        }
+        [
+            "app-server", "--stdio",
+            "--disable", "apps",
+            "--disable", "goals",
+            "--disable", "multi_agent",
+            "--disable", "shell_tool",
+            "--disable", "plugins",
+            "--config", "mcp_servers={}"
+        ]
     }
 
     private static func input(

@@ -21,12 +21,12 @@
   开关。
 - 浏览器和原生 Accessibility 快照补充父子层级与结构角色。
 - 接管 Skill 更名为 `jellypet-takeover`，改为中文描述通用界面接管契约。
-- 屏幕接管只保留 Codex/TraeX app-server 路径；Claude Code/OpenCode 继续支持截图问答，
-  选择接管时返回明确错误。
+- 截图问答与屏幕接管统一只走 Codex app-server。
 
 ### Removed
 
 - 删除只面向考试场景的 `human-exam-taking` 打包 Skill。
+- 删除 TraeX、Claude Code、OpenCode、自动运行时选择、终端适配器和模型探测分叉。
 - 删除没有生产调用者的 Workflow/Ledger、对应实现复述测试，以及终端 Runtime 的第二套
   JSON 接管循环和 40 轮预算。
 - 删除损坏截图的原始字节指纹兜底、一次性主气泡渲染入口、旧 Codex 专用错误枚举和无
@@ -39,7 +39,7 @@
 - 删除 `type_text` 的 `replace` 分叉；模型只提交完整最终文本，无法安全保留已有内容时
   立即停止。
 
-> 当前未发布代码仍有 TraeX/OpenCode 工具边界和真实 E2E 待办，不应直接发布。
+> 当前未发布代码仍有真实桌面 E2E 待办，不应直接发布。
 
 ## [0.9.2] - 2026-08-19
 

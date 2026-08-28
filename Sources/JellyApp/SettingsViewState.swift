@@ -10,9 +10,8 @@ struct SettingsViewState {
     let globalShortcut: GlobalShortcut
     let answerScrollShortcut: AnswerScrollShortcut
     let answerHistoryShortcut: AnswerHistoryShortcut
-    let availableRuntimes: Set<AgentRuntimeKind>
     let modelOptions: [String]
-    let runtimeText: String
+    let codexStatusText: String
     let configurationURL: URL
     let configurationError: String?
     let spriteSheetURL: URL?

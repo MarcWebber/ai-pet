@@ -102,7 +102,7 @@ private final class ActionGroupResponder: AIResponder {
         onTextDelta: @escaping @Sendable (String) -> Void,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
-        guard let screenToolHandler else { throw PetFailure.agentRuntimeUnavailable("Agent") }
+        guard let screenToolHandler else { throw PetFailure.codexUnavailable }
         let send = SemanticElementLocator(
             role: .button,
             label: SemanticTextMatcher("Send")
@@ -195,8 +195,7 @@ private func runActionGroupScenario(
         displayID: 1,
         task: "action group checks",
         assistantPreferences: AssistantPreferences(
-            runtime: .automatic,
-            model: AssistantPreferences.automaticModel,
+            model: AssistantPreferences.defaultModel,
             reasoningEffort: .high
         )
     ))

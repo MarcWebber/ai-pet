@@ -25,7 +25,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let subtitle = NSTextField(wrappingLabelWithString: "")
     private let display = NSPopUpButton()
     private let displayDetail = NSTextField(labelWithString: "")
-    private let runtime = NSPopUpButton()
     private let modelSuggestions = NSPopUpButton()
     private let modelField = NSTextField()
     private let effort = NSPopUpButton()
@@ -39,7 +38,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private let shortcut = NSPopUpButton()
     private let answerScrollShortcut = NSPopUpButton()
     private let answerHistoryShortcut = NSPopUpButton()
-    private let runtimeStatus = NSTextField(wrappingLabelWithString: "检查中…")
+    private let codexStatus = NSTextField(wrappingLabelWithString: "检查中…")
     private let spriteStatus = NSTextField(wrappingLabelWithString: "使用内置外形")
     private let configurationStatus = NSTextField(wrappingLabelWithString: "")
     private let chooseSprite = CartoonButton()
@@ -49,7 +48,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     private var displays: [DisplayDescriptor] = []
     private var assistant = AssistantPreferences.default
     private var cartoonCards: [CartoonCardView] = []
-    private let automaticModelLabel = "自动（使用 Runtime 默认模型）"
+    private let automaticModelLabel = "自动（使用 Codex 默认模型）"
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -87,7 +86,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let inputPopups = [
             display,
-            runtime,
             modelSuggestions,
             effort,
             shortcut,
@@ -129,7 +127,6 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         title.stringValue = "果冻的小窝"
         subtitle.stringValue = "模型、外形和快捷键，都可以在这里慢慢调整"
         renderDisplays(state)
-        renderRuntimes(state)
         renderModels(state)
         select(state.assistantPreferences.reasoningEffort.rawValue, in: effort)
         select(state.globalShortcut.rawValue, in: shortcut)
@@ -149,8 +146,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         if custom.window?.firstResponder !== custom {
             custom.string = state.assistantPreferences.customInstructions
         }
-        runtimeStatus.stringValue = state.runtimeText
-        runtimeStatus.toolTip = state.runtimeText
+        codexStatus.stringValue = state.codexStatusText
+        codexStatus.toolTip = state.codexStatusText
         spriteStatus.stringValue = state.spriteSheetURL.map {
             "自定义造型 · \($0.lastPathComponent)"
         } ?? "内置果冻 · 8 种状态 × 8 帧"
@@ -178,18 +175,12 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         )
 
         configure(display, action: #selector(displayChanged))
-        configure(
-            runtime,
-            values: AgentRuntimeKind.allCases,
-            title: \.displayName,
-            action: #selector(runtimeChanged)
-        )
         configure(modelSuggestions, action: #selector(modelSuggestionChanged))
         modelField.placeholderString = "模型 ID，例如 gpt-5.6-luna；留空表示自动"
         modelField.delegate = self
         modelField.target = self
         modelField.action = #selector(modelFieldChanged)
-        modelField.toolTip = "可以从建议中选择，也可以完整输入 Runtime 支持的模型 ID。"
+        modelField.toolTip = "可以从建议中选择，也可以输入 Codex 支持的模型 ID。"
         configure(
             effort,
             values: ReasoningEffort.allCases,
@@ -274,14 +265,14 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         customScroll.layer?.borderColor = NSColor.systemPurple
             .withAlphaComponent(0.22).cgColor
 
-        [display, runtime, modelSuggestions, effort, shortcut,
+        [display, modelSuggestions, effort, shortcut,
          answerScrollShortcut, answerHistoryShortcut].forEach {
             $0.controlSize = .large
             $0.font = roundedFont(ofSize: 13, weight: .semibold)
             $0.contentTintColor = .systemPurple
         }
         stylePopup(display, color: .systemBlue)
-        [runtime, modelSuggestions, effort].forEach {
+        [modelSuggestions, effort].forEach {
             stylePopup($0, color: .systemPurple)
         }
         [shortcut, answerScrollShortcut, answerHistoryShortcut].forEach {
@@ -296,7 +287,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         typingSpeedField.font = roundedFont(ofSize: 13, weight: .semibold)
         styleTextField(typingSpeedField, color: .systemOrange)
         displayDetail.font = roundedFont(ofSize: 12, weight: .medium)
-        runtimeStatus.font = roundedFont(ofSize: 12, weight: .medium)
+        codexStatus.font = roundedFont(ofSize: 12, weight: .medium)
         spriteStatus.font = roundedFont(ofSize: 12.5, weight: .semibold)
         configurationStatus.font = .monospacedSystemFont(
             ofSize: 10.5,
@@ -381,17 +372,16 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             ]
         )
         let brainCard = sectionCard(
-            title: "Agent 大脑",
+            title: "Codex",
             symbolName: "brain.head.profile",
-            subtitle: "选择运行引擎、模型和果冻能够记住的对话。",
+            subtitle: "设置模型、思考力度和果冻能够记住的对话。",
             tint: .systemPurple,
             rows: [
-                row("运行引擎", runtime),
                 row("使用模型", modelBlock),
                 row("思考力度", effort),
                 row("记住对话", historyBlock),
                 row("自定义指令", customScroll),
-                row("连接状态", runtimeStatus)
+                row("连接状态", codexStatus)
             ]
         )
         let appearanceCard = sectionCard(
@@ -668,14 +658,12 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func publishAssistant(
-        runtime: AgentRuntimeKind? = nil,
         model: String? = nil,
         effort: ReasoningEffort? = nil,
         customInstructions: String? = nil,
         historyTurns: Int? = nil
     ) {
         assistant = AssistantPreferences(
-            runtime: runtime ?? assistant.runtime,
             model: model ?? assistant.model,
             reasoningEffort: effort ?? assistant.reasoningEffort,
             customInstructions:
@@ -695,18 +683,10 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         onAction?(.display(id))
     }
 
-    @objc private func runtimeChanged() {
-        guard let value: AgentRuntimeKind = selected(runtime) else { return }
-        publishAssistant(
-            runtime: value,
-            model: AssistantPreferences.automaticModel
-        )
-    }
-
     @objc private func modelSuggestionChanged() {
         let value = modelSuggestions.selectedItem?.representedObject as? String
-            ?? AssistantPreferences.automaticModel
-        modelField.stringValue = value == AssistantPreferences.automaticModel
+            ?? AssistantPreferences.defaultModel
+        modelField.stringValue = value == AssistantPreferences.defaultModel
             ? "" : value
         publishAssistant(model: value)
     }
@@ -834,40 +814,12 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         display.isEnabled = !displays.isEmpty
     }
 
-    private func renderRuntimes(_ state: SettingsViewState) {
-        let automaticRuntime = [
-            AgentRuntimeKind.codex,
-            .traex,
-            .claudeCode,
-            .openCode
-        ].first { state.availableRuntimes.contains($0) }
-        for item in runtime.itemArray {
-            guard let rawValue = item.representedObject as? String,
-                  let kind = AgentRuntimeKind(rawValue: rawValue) else {
-                continue
-            }
-            if kind == .automatic {
-                let resolved = automaticRuntime.map {
-                    " · \($0.displayName)"
-                } ?? ""
-                item.title = "自动选择\(resolved)"
-                item.isEnabled = true
-            } else {
-                let installed = state.availableRuntimes.contains(kind)
-                item.title = installed
-                    ? kind.displayName : "\(kind.displayName)（未找到）"
-                item.isEnabled = installed
-            }
-        }
-        select(state.assistantPreferences.runtime.rawValue, in: runtime)
-    }
-
     private func renderModels(_ state: SettingsViewState) {
         let current = state.assistantPreferences.model
         modelSuggestions.removeAllItems()
         modelSuggestions.addItem(withTitle: automaticModelLabel)
         modelSuggestions.lastItem?.representedObject =
-            AssistantPreferences.automaticModel
+            AssistantPreferences.defaultModel
         for option in state.modelOptions {
             modelSuggestions.addItem(withTitle: option)
             modelSuggestions.lastItem?.representedObject = option
@@ -880,14 +832,14 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             modelSuggestions.selectItem(at: 0)
         }
         if modelField.currentEditor() == nil {
-            modelField.stringValue = current == AssistantPreferences.automaticModel
+            modelField.stringValue = current == AssistantPreferences.defaultModel
                 ? "" : current
         }
     }
 
     private func normalizedModel(_ value: String) -> String {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? AssistantPreferences.automaticModel
+        return value.isEmpty ? AssistantPreferences.defaultModel
             : String(value.prefix(200))
     }
 

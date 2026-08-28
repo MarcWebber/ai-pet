@@ -6,8 +6,8 @@ public enum PetFailure: Error, Equatable, Sendable {
     case captureFailed
     case screenCapturePermissionRequired
     case editorTextUnavailable
-    case agentRuntimeUnavailable(String)
-    case agentRuntimeFailed(String, String)
+    case codexUnavailable
+    case codexFailed(String)
     case invalidCodexOutput
     case shortcutUnavailable
     case answerScrollShortcutUnavailable
@@ -32,10 +32,10 @@ extension PetFailure: LocalizedError {
             return "JellyPet 还没有屏幕录制权限。请先在系统设置的“隐私与安全性 → 屏幕与系统音频录制”中允许 JellyPet；本次不会打开选区截图。"
         case .editorTextUnavailable:
             return "暂时无法读取编辑器内容，请重新观察并再次定位编辑器。"
-        case let .agentRuntimeUnavailable(runtime):
-            return "没有找到 \(runtime) 的本地 CLI，请在设置中选择已探测到的 Runtime。"
-        case let .agentRuntimeFailed(runtime, message):
-            return "\(runtime) 运行失败：\(message)"
+        case .codexUnavailable:
+            return "没有找到本机 Codex CLI，请先安装并登录 Codex。"
+        case let .codexFailed(message):
+            return "Codex 运行失败：\(message)"
         case .invalidCodexOutput:
             return "Agent 没有返回可显示的回答，请重试。"
         case .shortcutUnavailable:

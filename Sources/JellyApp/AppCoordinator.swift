@@ -21,8 +21,7 @@ final class AppCoordinator {
     private let status = StatusItemController()
     private let temporaryArtifactSweeper = TemporaryArtifactSweeper()
     private let soundPlayer: SoundPlayer
-    private let runtimes: [LocalAgentRuntime]
-    private let modelCatalog = LocalAgentModelCatalog()
+    private let codexExecutableURL: URL?
     private let takeover: TakeoverCoordinator
 
     private var requestTask: Task<Void, Never>?
@@ -48,7 +47,7 @@ final class AppCoordinator {
             configurationTemplateURL: configurationTemplateURL
         )
         preferencesStore = preferences
-        runtimes = LocalAgentRuntimeLocator.detect()
+        codexExecutableURL = CodexExecutableLocator.locate()
         let packagedSkill = Bundle.main.resourceURL?
             .appendingPathComponent("Skills/jellypet-takeover/SKILL.md")
         let skillURL = packagedSkill.flatMap {
@@ -63,8 +62,8 @@ final class AppCoordinator {
         let semanticProvider = BrowserAccessibilityContextProvider()
         takeover = TakeoverCoordinator(
             capture: capture,
-            responder: LocalAgentResponder(
-                runtimes: runtimes,
+            responder: CodexProcessResponder(
+                executableURL: codexExecutableURL,
                 skillURL: skillURL
             ),
             cleaner: cleaner,
@@ -746,21 +745,9 @@ final class AppCoordinator {
             preferencesStore.selectedDisplayID = display.id
         }
 
-        let preferences = preferencesStore.assistantPreferences
-        let selectedRuntime = LocalAgentRuntimeLocator.resolve(
-            preferences.runtime,
-            from: runtimes
-        )
-        let models = if let selectedRuntime {
-            await modelCatalog.models(for: selectedRuntime)
-        } else {
-            [String]()
-        }
-        let runtimeText = runtimes.isEmpty
-            ? "未发现兼容 CLI；支持 Codex、TraeX、Claude Code、OpenCode"
-            : runtimes.map {
-                "\($0.kind.displayName) · \($0.executableURL.path)"
-            }.joined(separator: "\n")
+        let codexStatusText = codexExecutableURL.map {
+            "已连接 Codex · \($0.path)"
+        } ?? "未找到 Codex CLI，请先安装并登录 Codex"
         guard !Task.isCancelled else {
             return
         }
@@ -778,9 +765,8 @@ final class AppCoordinator {
                     preferencesStore.answerScrollShortcut,
                 answerHistoryShortcut:
                     preferencesStore.answerHistoryShortcut,
-                availableRuntimes: Set(runtimes.map(\.kind)),
-                modelOptions: models,
-                runtimeText: runtimeText,
+                modelOptions: CodexProcessResponder.suggestedModels,
+                codexStatusText: codexStatusText,
                 configurationURL: preferencesStore.configurationURL,
                 configurationError: configurationError,
                 spriteSheetURL: spriteSheetURL
