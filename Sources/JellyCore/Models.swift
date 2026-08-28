@@ -6,7 +6,6 @@ public enum PetFailure: Error, Equatable, Sendable {
     case captureFailed
     case screenCapturePermissionRequired
     case editorTextUnavailable
-    case existingEditorTextProtected
     case agentRuntimeUnavailable(String)
     case agentRuntimeFailed(String, String)
     case invalidCodexOutput
@@ -32,9 +31,7 @@ extension PetFailure: LocalizedError {
         case .screenCapturePermissionRequired:
             return "JellyPet 还没有屏幕录制权限。请先在系统设置的“隐私与安全性 → 屏幕与系统音频录制”中允许 JellyPet；本次不会打开选区截图。"
         case .editorTextUnavailable:
-            return "无法读取编辑器里的现有内容。为避免清空起始代码，本次输入已停止；请重新观察并定位编辑器。"
-        case .existingEditorTextProtected:
-            return "最终代码会改动编辑器里的非空白原文。为保护起始代码，本次输入已停止；请保留原有签名和代码，只在空白处补全。"
+            return "暂时无法读取编辑器内容，请重新观察并再次定位编辑器。"
         case let .agentRuntimeUnavailable(runtime):
             return "没有找到 \(runtime) 的本地 CLI，请在设置中选择已探测到的 Runtime。"
         case let .agentRuntimeFailed(runtime, message):
@@ -50,13 +47,13 @@ extension PetFailure: LocalizedError {
         case .invalidScreenAction:
             return "Agent 返回的鼠标或键盘参数无效。"
         case .semanticTargetUnavailable:
-            return "AI 连续引用了当前页面快照中不存在的元素，接管已停止。"
+            return "当前页面快照里没有这个元素，请重新观察后定位。"
         case let .semanticLocatorFailed(message):
             return "无法在当前界面唯一定位目标元素：\(message)"
         case .inputFocusChanged:
-            return "输入目标没有获得焦点，或输入过程中前台窗口发生了变化；为避免把内容打到别处，本次输入已立即停止。"
+            return "输入目标没有获得焦点，或输入过程中前台窗口发生了变化；请重新观察并继续。"
         case .screenActionFailed:
-            return "无法执行鼠标或键盘动作，接管已停止。"
+            return "这次鼠标或键盘动作没有执行成功，请重新观察并继续。"
         }
     }
 }

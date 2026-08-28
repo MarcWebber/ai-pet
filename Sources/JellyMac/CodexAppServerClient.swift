@@ -867,7 +867,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "type_text",
-                "定位一个可读取当前值的语义输入目标，并给出完整最终文本。没有语义目标、目标无法获得焦点、前台窗口变化，或最终文本会改写已有非空白内容时立即停止；不使用视觉坐标或焦点兜底。",
+                "定位一个可读取当前值的语义输入目标，并给出完整最终文本。执行器会自行选择、删除并逐字重输实际差异范围，必要时替换整段内容；不要先手工全选或移动光标。动作失败后重新观察并再次使用本工具。",
                 schema(
                     properties: [
                         "target": semanticTargetSchema,
@@ -898,7 +898,7 @@ actor CodexAppServerClient {
             ),
             tool(
                 "key_press",
-                "发送一个非删除按键及可选组合键；不允许 Delete、Forward Delete 或 Command+A。",
+                "发送按键及可选组合键，包括 Delete、Forward Delete 和 Command+A。",
                 schema(
                     properties: [
                         "key": [

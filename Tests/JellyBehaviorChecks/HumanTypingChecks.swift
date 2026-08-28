@@ -84,15 +84,16 @@ func runHumanTypingChecks() {
         currentText: starter,
         desiredText: completed
     )
-    if case let .insertAtBoundary(prefix, suffix, replacement) = edit {
-        let old = Array(starter), new = Array(completed)
-        let replayed = String(old[..<prefix]) + replacement
-            + String(old[(old.count - suffix)...])
+    if case let .replaceRange(location, length, replacement) = edit {
+        let old = Array(starter.utf16)
+        let replayed = String(decoding: old[..<location], as: UTF16.self)
+            + replacement
+            + String(decoding: old[(location + length)...], as: UTF16.self)
         check(
-            prefix > "class Solution {".count
-                && suffix > 0
+            location > "class Solution {".utf16.count
+                && location + length < old.count
                 && !replacement.contains("class Solution")
-                && replayed == String(new),
+                && replayed == completed,
             "starter code must be preserved while the blank method body is typed"
         )
     } else {
@@ -116,38 +117,59 @@ func runHumanTypingChecks() {
         of: "\(blankBody)\n",
         with: "            return 0;\n"
     )
-    check(
-        HumanTextEditPlan.make(
-            currentText: nonBlankStarter,
-            desiredText: completed
-        ) == .existingTextProtected,
-        "non-blank starter code must never be deleted or replaced"
+    let damagedEdit = HumanTextEditPlan.make(
+        currentText: nonBlankStarter,
+        desiredText: completed
     )
-    check(
-        HumanTextEditPlan.make(
-            currentText: "existing code",
-            desiredText: "different code"
-        ) == .existingTextProtected,
-        "an unrelated final answer must never trigger replace-all"
-    )
+    if case let .replaceRange(location, length, replacement)
+        = damagedEdit {
+        let old = Array(nonBlankStarter.utf16)
+        let repaired = String(decoding: old[..<location], as: UTF16.self)
+            + replacement
+            + String(decoding: old[(location + length)...], as: UTF16.self)
+        check(
+            length > 0 && repaired == completed,
+            "non-blank damaged code must be repaired inside its shared wrapper"
+        )
+    } else {
+        check(false, "damaged code should produce one bounded repair")
+    }
+    let unrelatedCurrent = "existing code"
+    let unrelatedDesired = "different code"
+    if case let .replaceRange(location, length, replacement)
+        = HumanTextEditPlan.make(
+            currentText: unrelatedCurrent,
+            desiredText: unrelatedDesired
+        ) {
+        let old = Array(unrelatedCurrent.utf16)
+        let repaired = String(decoding: old[..<location], as: UTF16.self)
+            + replacement
+            + String(decoding: old[(location + length)...], as: UTF16.self)
+        check(
+            length > 0 && repaired == unrelatedDesired,
+            "the takeover agent must be able to replace fully damaged code"
+        )
+    } else {
+        check(false, "unrelated damaged text should still produce a repair")
+    }
     check(
         HumanTextEditPlan.make(
             currentText: "class Solution {\n    return ;\n}",
             desiredText: "class Solution {\n    return answer;\n}"
-        ) == .insertAtBoundary(
-            prefixCount: 28,
-            suffixCount: 3,
+        ) == .replaceRange(
+            location: 28,
+            length: 0,
             text: "answer"
         ),
         "a contiguous fragment deleted during typing must be resumed at the gap"
     )
     check(
-        (try? ScreenAction.keyPress(key: .delete, modifiers: []).validate()) == nil
+        (try? ScreenAction.keyPress(key: .delete, modifiers: []).validate()) != nil
             && (try? ScreenAction.keyPress(
                 key: .a,
                 modifiers: [.command]
-            ).validate()) == nil,
-        "model-visible key presses must not expose delete or select-all"
+            ).validate()) != nil,
+        "the takeover agent must have delete and select-all keyboard access"
     )
     check(
         (try? ScreenAction.typeText(

@@ -51,12 +51,10 @@ public enum ScreenAction: Equatable, Sendable {
             try target.validate()
             guard !target.isVisual else { throw PetFailure.invalidScreenAction }
             guard !text.isEmpty, text.utf16.count <= 100_000 else { throw PetFailure.invalidScreenAction }
-        case let .keyPress(key, modifiers):
-            guard Set(modifiers).count == modifiers.count,
-                  key != .delete,
-                  key != .forwardDelete,
-                  !(key == .a && modifiers.contains(.command))
-            else { throw PetFailure.invalidScreenAction }
+        case let .keyPress(_, modifiers):
+            guard Set(modifiers).count == modifiers.count else {
+                throw PetFailure.invalidScreenAction
+            }
         case let .navigate(url):
             let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
             guard url == trimmed,

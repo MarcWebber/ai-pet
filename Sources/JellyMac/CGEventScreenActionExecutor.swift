@@ -160,10 +160,8 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
             throw PetFailure.semanticTargetUnavailable
         }
         var processID: pid_t = 0
-        let frontmostID = NSWorkspace.shared.frontmostApplication?
-            .processIdentifier
         let pidStatus = AXUIElementGetPid(element, &processID)
-        guard pidStatus == .success, frontmostID == processID else {
+        guard pidStatus == .success else {
             throw PetFailure.inputFocusChanged
         }
         try click(at: coordinate(target, snapshot, in: bounds), count: 1)
@@ -339,11 +337,13 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         while index < strokes.count {
             let stroke = strokes[index]
             try Task.checkCancellation()
-            if let focusedElement { try ensureFocused(focusedElement) }
+            if let focusedElement { try ensureTypingProcess(focusedElement) }
             if let mistake = stroke.mistypedText {
                 try emit(mistake)
                 try await pause(stroke.mistakeDelayMilliseconds)
-                if let focusedElement { try ensureFocused(focusedElement) }
+                if let focusedElement {
+                    try ensureTypingProcess(focusedElement)
+                }
                 try keyPress(.delete, [])
                 try await pause(stroke.correctionDelayMilliseconds)
             }
@@ -380,7 +380,7 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     private func removeAutoClosedBrace(
         focusedElement: AXUIElement
     ) async throws {
-        try ensureFocused(focusedElement)
+        try ensureTypingProcess(focusedElement)
         var rawValue: CFTypeRef?, rawSelection: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
             focusedElement,
@@ -418,7 +418,7 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     ) async throws {
         let wanted = Array(desired)
         for _ in 0..<64 {
-            try ensureFocused(focusedElement)
+            try ensureTypingProcess(focusedElement)
             let current = Array(try automaticIndentation(
                 focusedElement: focusedElement
             ))
@@ -491,42 +491,34 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         focusedElement: AXUIElement
     ) async throws {
         let desired = HumanTextEditPlan.normalize(text)
-        var stableReads = 0
-        for _ in 0..<4 {
-            try ensureFocused(focusedElement)
-            let current = HumanTextEditPlan.normalize(
-                try editorText(focusedElement)
+        try ensureFocused(focusedElement)
+        let current = HumanTextEditPlan.normalize(
+            try editorText(focusedElement)
+        )
+        switch HumanTextEditPlan.make(
+            currentText: current,
+            desiredText: desired
+        ) {
+        case .currentTextUnavailable:
+            throw PetFailure.editorTextUnavailable
+        case .unchanged:
+            return
+        case let .replaceRange(location, length, value):
+            try selectTextRange(
+                location: location,
+                length: length,
+                focusedElement: focusedElement
             )
-            switch HumanTextEditPlan.make(
-                currentText: current,
-                desiredText: desired
-            ) {
-            case .currentTextUnavailable:
-                throw PetFailure.editorTextUnavailable
-            case .existingTextProtected:
-                throw PetFailure.existingEditorTextProtected
-            case .unchanged:
-                stableReads += 1
-                if stableReads >= 2 { return }
-            case let .append(value):
-                stableReads = 0
+            if value.isEmpty {
+                try keyPress(.delete, [])
+            } else {
                 try await type(value, focusedElement: focusedElement)
-            case let .insertAtBoundary(prefix, suffix, value):
-                stableReads = 0
-                try await moveToTextBoundary(
-                    prefixCount: prefix,
-                    suffixCount: suffix,
-                    focusedElement: focusedElement
-                )
-                if !value.isEmpty {
-                    try await type(value, focusedElement: focusedElement)
-                }
             }
-            try await pause(300)
         }
+        try await pause(300)
         guard HumanTextEditPlan.normalize(try editorText(focusedElement))
             == desired else {
-            throw PetFailure.existingEditorTextProtected
+            throw PetFailure.screenActionFailed
         }
     }
 
@@ -543,42 +535,29 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         return value
     }
 
-    private func moveToTextBoundary(
-        prefixCount: Int,
-        suffixCount: Int,
+    private func selectTextRange(
+        location: Int,
+        length: Int,
         focusedElement: AXUIElement
-    ) async throws {
+    ) throws {
         try ensureFocused(focusedElement)
-        if prefixCount <= suffixCount {
-            try keyPress(.up, [.command]); try await pause(70)
-            try await repeatKey(
-                .right,
-                count: prefixCount,
-                focusedElement: focusedElement
-            )
-        } else {
-            try keyPress(.down, [.command]); try await pause(70)
-            try await repeatKey(
-                .left,
-                count: suffixCount,
-                focusedElement: focusedElement
-            )
+        var range = CFRange(location: location, length: length)
+        guard let value = AXValueCreate(.cfRange, &range),
+              AXUIElementSetAttributeValue(
+                  focusedElement,
+                  kAXSelectedTextRangeAttribute as CFString,
+                  value
+              ) == .success else {
+            throw PetFailure.inputFocusChanged
         }
-        try await pause(90)
     }
 
-    private func repeatKey(
-        _ key: ScreenKey,
-        modifiers: [KeyModifier] = [],
-        count: Int,
-        focusedElement: AXUIElement? = nil
-    ) async throws {
-        guard count > 0 else { return }
-        for index in 0..<count {
-            try Task.checkCancellation()
-            if let focusedElement { try ensureFocused(focusedElement) }
-            try keyPress(key, modifiers)
-            if index % 20 == 19 { try await pause(18) }
+    private func ensureTypingProcess(_ expected: AXUIElement) throws {
+        var processID: pid_t = 0
+        guard AXUIElementGetPid(expected, &processID) == .success,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier
+                == processID else {
+            throw PetFailure.inputFocusChanged
         }
     }
 

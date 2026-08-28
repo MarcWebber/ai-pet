@@ -13,15 +13,12 @@ public final class TakeoverCoordinator {
     public var canFollowUp: Bool { answerPreferences != nil }
 
     private struct Session {
-        static let maximumActions = 60
-
         let request: TakeoverRequest
         var currentSnapshot: SemanticSnapshot?
         var hasScreenshot = false
         var sequence = 0
         var actionCount = 0
         var observationCount = 0
-        var terminalStopReason: String?
         var uncertainActivationSignatures: [String: Int] = [:]
         let startedAt = Date()
     }
@@ -229,12 +226,6 @@ public final class TakeoverCoordinator {
             return ScreenToolResult(
                 success: false,
                 message: "JellyPet 会话已经结束。"
-            )
-        }
-        if let reason = session?.terminalStopReason {
-            return ScreenToolResult(
-                success: false,
-                message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
             )
         }
         session?.sequence += 1
@@ -491,7 +482,6 @@ public final class TakeoverCoordinator {
         } catch {
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
-            session?.terminalStopReason = message
             trace(
                 .failure,
                 "观察失败",
@@ -499,10 +489,10 @@ public final class TakeoverCoordinator {
                 sequence: sequence,
                 details: message
             )
-            publish(.deciding, "观察失败，本轮接管已停止")
+            publish(.deciding, "观察失败，等待 Agent 重试")
             return ScreenToolResult(
                 success: false,
-                message: "\(message) 本轮接管已停止；不要重复截图或改用其他链路。"
+                message: "\(message) 请稍后重新调用 observe 继续当前任务。"
             )
         }
     }
@@ -535,22 +525,6 @@ public final class TakeoverCoordinator {
             let executableAction = try action.resolvingSemanticTargets(
                 in: current.currentSnapshot
             )
-            guard (session?.actionCount ?? 0) < Session.maximumActions else {
-                let reason = "连续操作已达到 \(Session.maximumActions) 次，接管已停止以避免失控。"
-                session?.terminalStopReason = reason
-                trace(
-                    .failure,
-                    "接管监管已停止任务",
-                    kind: .outcome,
-                    sequence: sequence,
-                    details: reason
-                )
-                publish(.deciding, reason)
-                return ScreenToolResult(
-                    success: false,
-                    message: "\(reason) 不要继续调用屏幕工具，请向用户说明停止原因。"
-                )
-            }
             session?.actionCount += 1
             publish(.locating, "Agent 已选择 \(action.label)")
             trace(
@@ -596,7 +570,6 @@ public final class TakeoverCoordinator {
             session?.hasScreenshot = false
             let message = (error as? PetFailure)?.localizedDescription
                 ?? error.localizedDescription
-            session?.terminalStopReason = message
             trace(
                 .failure,
                 "\(action.label) 执行失败",
@@ -604,10 +577,10 @@ public final class TakeoverCoordinator {
                 sequence: sequence,
                 details: message
             )
-            publish(.deciding, "操作失败，本轮接管已停止")
+            publish(.deciding, "操作失败，等待 Agent 重新观察")
             return ScreenToolResult(
                 success: false,
-                message: "\(message) 本轮接管已停止；不要换目标、坐标或导航兜底。"
+                message: "\(message) 请重新调用 observe，根据最新界面继续当前任务。"
             )
         }
     }

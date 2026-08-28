@@ -24,12 +24,10 @@ public struct HumanTypingStroke: Codable, Equatable, Sendable {
 
 public enum HumanTextEdit: Equatable, Sendable {
     case currentTextUnavailable
-    case existingTextProtected
     case unchanged
-    case append(String)
-    case insertAtBoundary(
-        prefixCount: Int,
-        suffixCount: Int,
+    case replaceRange(
+        location: Int,
+        length: Int,
         text: String
     )
 }
@@ -43,9 +41,8 @@ public enum HumanTextEditPlan {
         guard let currentText else { return .currentTextUnavailable }
         let current = normalize(currentText)
         guard current != desired else { return .unchanged }
-        guard !current.isEmpty else { return .append(desired) }
 
-        let old = Array(current), new = Array(desired)
+        let old = Array(current.utf16), new = Array(desired.utf16)
         let sharedLimit = min(old.count, new.count)
         var prefixCount = 0
         while prefixCount < sharedLimit,
@@ -58,18 +55,15 @@ public enum HumanTextEditPlan {
                 == new[new.count - suffixCount - 1] {
             suffixCount += 1
         }
-        guard prefixCount > 0 || suffixCount > 0 else {
-            return .existingTextProtected
-        }
         let removedEnd = old.count - suffixCount
-        guard old[prefixCount..<removedEnd].allSatisfy(\.isWhitespace) else {
-            return .existingTextProtected
-        }
         let replacementEnd = new.count - suffixCount
-        return .insertAtBoundary(
-            prefixCount: prefixCount,
-            suffixCount: suffixCount,
-            text: String(new[prefixCount..<replacementEnd])
+        return .replaceRange(
+            location: prefixCount,
+            length: removedEnd - prefixCount,
+            text: String(
+                decoding: new[prefixCount..<replacementEnd],
+                as: UTF16.self
+            )
         )
     }
 

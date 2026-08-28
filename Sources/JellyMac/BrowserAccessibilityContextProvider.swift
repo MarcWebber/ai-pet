@@ -161,14 +161,12 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
         observationID = UUID().uuidString.lowercased()
         nativeElements.removeAll(keepingCapacity: true)
         let currentObservationID = observationID
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         let bounds = CGDisplayBounds(displayID)
         guard bounds.width > 0, bounds.height > 0 else { return nil }
-        let processID = app.processIdentifier
-        guard let window = frontWindow(
-            AXUIElementCreateApplication(processID),
-            intersecting: bounds
-        ), let windowFrame = window.axFrame else { return nil }
+        guard let (app, window) = displayWindow(intersecting: bounds) else {
+            return nil
+        }
+        guard let windowFrame = window.axFrame else { return nil }
         let visible = windowFrame.intersection(bounds)
         guard !visible.isNull else { return nil }
 
@@ -221,6 +219,98 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
             return focused
         }
         return app.axElements(kAXWindowsAttribute).first { validWindow($0, bounds) }
+    }
+
+    private func displayWindow(
+        intersecting bounds: CGRect
+    ) -> (NSRunningApplication, AXUIElement)? {
+        let options: CGWindowListOption = [
+            .optionOnScreenOnly, .excludeDesktopElements
+        ]
+        let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
+        let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        var visited: Set<pid_t> = []
+        for info in windows {
+            guard (info[kCGWindowLayer as String] as? Int) == 0,
+                  let owner = info[kCGWindowOwnerPID as String] as? Int,
+                  pid_t(owner) != ownPID,
+                  visited.insert(pid_t(owner)).inserted,
+                  let running = NSRunningApplication(
+                      processIdentifier: pid_t(owner)
+                  ),
+                  running.activationPolicy == .regular,
+                  let frame = windows.compactMap({ candidate -> CGRect? in
+                      guard (candidate[kCGWindowLayer as String] as? Int) == 0,
+                            (candidate[kCGWindowOwnerPID as String] as? Int)
+                                == owner,
+                            let frame = windowFrame(candidate),
+                            frame.intersects(bounds) else {
+                          return nil
+                      }
+                      return frame
+                  }).max(by: {
+                      visibleArea($0, in: bounds) < visibleArea($1, in: bounds)
+                  }),
+                  let window = matchingWindow(
+                      AXUIElementCreateApplication(pid_t(owner)),
+                      frame: frame,
+                      intersecting: bounds
+                  ) else {
+                continue
+            }
+            return (running, window)
+        }
+        guard let running = NSWorkspace.shared.frontmostApplication,
+              let window = frontWindow(
+                  AXUIElementCreateApplication(running.processIdentifier),
+                  intersecting: bounds
+              ) else {
+            return nil
+        }
+        return (running, window)
+    }
+
+    private func windowFrame(_ info: [String: Any]) -> CGRect? {
+        guard let raw = info[kCGWindowBounds as String] as? [String: Any],
+              let x = raw["X"] as? NSNumber,
+              let y = raw["Y"] as? NSNumber,
+              let width = raw["Width"] as? NSNumber,
+              let height = raw["Height"] as? NSNumber else {
+            return nil
+        }
+        return CGRect(
+            x: x.doubleValue,
+            y: y.doubleValue,
+            width: width.doubleValue,
+            height: height.doubleValue
+        )
+    }
+
+    private func visibleArea(_ frame: CGRect, in bounds: CGRect) -> CGFloat {
+        let intersection = frame.intersection(bounds)
+        return intersection.isNull ? 0 : intersection.width * intersection.height
+    }
+
+    private func matchingWindow(
+        _ app: AXUIElement,
+        frame: CGRect,
+        intersecting bounds: CGRect
+    ) -> AXUIElement? {
+        let windows = app.axElements(kAXWindowsAttribute).filter {
+            validWindow($0, bounds)
+        }
+        return windows.min {
+            windowDistance($0.axFrame, frame) < windowDistance($1.axFrame, frame)
+        }
+    }
+
+    private func windowDistance(_ candidate: CGRect?, _ expected: CGRect) -> CGFloat {
+        guard let candidate else { return .greatestFiniteMagnitude }
+        return abs(candidate.minX - expected.minX)
+            + abs(candidate.minY - expected.minY)
+            + abs(candidate.width - expected.width)
+            + abs(candidate.height - expected.height)
     }
 
     private func validWindow(_ window: AXUIElement, _ bounds: CGRect?) -> Bool {
