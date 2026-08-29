@@ -1,6 +1,6 @@
 import Foundation
 
-public enum SemanticElementRole: String, Codable, CaseIterable, Equatable, Sendable {
+public enum ElementRole: String, Codable, CaseIterable, Equatable, Sendable {
     case button, link, textField, checkBox, radioButton
     case menuItem, popUpButton, scrollArea
     /// Read-only structure roles. These make stable ancestor locators possible
@@ -8,7 +8,7 @@ public enum SemanticElementRole: String, Codable, CaseIterable, Equatable, Senda
     case dialog, group, list, listItem, row, cell, tab, heading, staticText
 }
 
-public struct SemanticRect: Equatable, Sendable {
+public struct NormalizedRect: Equatable, Sendable {
     public let x, y, width, height: Int
     public init(x: Int, y: Int, width: Int, height: Int) {
         self.x = x; self.y = y; self.width = width; self.height = height
@@ -21,23 +21,23 @@ public struct SemanticRect: Equatable, Sendable {
     }
 }
 
-public struct SemanticElement: Equatable, Sendable {
+public struct ScreenElement: Equatable, Sendable {
     public let id: String
     /// An observation-scoped relationship. Both this ID and `id` are invalid
     /// once the UI is observed again.
     public let parentID: String?
-    public let role: SemanticElementRole
+    public let role: ElementRole
     public let label: String
     public let value: String?
-    public let frame: SemanticRect
+    public let frame: NormalizedRect
     public let isEnabled: Bool
     public init(
         id: String,
         parentID: String? = nil,
-        role: SemanticElementRole,
+        role: ElementRole,
         label: String,
         value: String? = nil,
-        frame: SemanticRect,
+        frame: NormalizedRect,
         isEnabled: Bool
     ) {
         self.id = id; self.parentID = parentID
@@ -46,16 +46,16 @@ public struct SemanticElement: Equatable, Sendable {
     }
 }
 
-public struct SemanticSnapshot: Equatable, Sendable {
+public struct ScreenSemantics: Equatable, Sendable {
     public let applicationName, windowTitle: String
     public let pageURL, readableText: String?
-    public let elements: [SemanticElement]
+    public let elements: [ScreenElement]
     public init(
         applicationName: String,
         windowTitle: String,
         pageURL: String? = nil,
         readableText: String? = nil,
-        elements: [SemanticElement]
+        elements: [ScreenElement]
     ) {
         self.applicationName = applicationName
         self.windowTitle = windowTitle; self.pageURL = pageURL
@@ -65,14 +65,14 @@ public struct SemanticSnapshot: Equatable, Sendable {
 
 private enum TargetSource: String, Codable { case element, locator, visual }
 
-public enum ScreenActionTarget: Equatable, Sendable {
+public enum ElementTarget: Equatable, Sendable {
     case element(elementID: String)
     /// A stable recipe resolved against the latest observation immediately before execution.
-    case locator(SemanticElementLocator)
+    case locator(ElementLocator)
     case visual(x: Int, y: Int)
 }
 
-extension ScreenActionTarget: Codable {
+extension ElementTarget: Codable {
     private enum Key: String, CodingKey { case source, elementID, locator, x, y }
 
     public init(from decoder: Decoder) throws {
@@ -89,7 +89,7 @@ extension ScreenActionTarget: Codable {
             )
         case .locator:
             self = .locator(
-                try values.decode(SemanticElementLocator.self, forKey: .locator)
+                try values.decode(ElementLocator.self, forKey: .locator)
             )
         }
     }
@@ -108,9 +108,4 @@ extension ScreenActionTarget: Codable {
             try values.encode(locator, forKey: .locator)
         }
     }
-}
-
-@MainActor
-public protocol SemanticContextProviding: AnyObject {
-    func snapshot(displayID: UInt32) async -> SemanticSnapshot?
 }

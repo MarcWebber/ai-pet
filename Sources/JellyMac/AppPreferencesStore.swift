@@ -32,7 +32,7 @@ public final class AppPreferencesStore {
                 AnswerScrollShortcut.controlOptionArrows.rawValue,
             Key.answerHistoryShortcut:
                 AnswerHistoryShortcut.controlOptionArrows.rawValue,
-            Key.typingSpeedPercent: HumanTypingPlan.defaultSpeedPercent
+            Key.typingSpeedPercent: TypingRhythm.defaultSpeedPercent
         ])
     }
 
@@ -190,13 +190,13 @@ public final class AppPreferencesStore {
 
     public var typingSpeedPercent: Int {
         get {
-            HumanTypingPlan.normalizedSpeedPercent(
+            TypingRhythm.normalizedSpeedPercent(
                 defaults.integer(forKey: Key.typingSpeedPercent)
             )
         }
         set {
             defaults.set(
-                HumanTypingPlan.normalizedSpeedPercent(newValue),
+                TypingRhythm.normalizedSpeedPercent(newValue),
                 forKey: Key.typingSpeedPercent
             )
         }

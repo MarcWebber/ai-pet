@@ -1,7 +1,7 @@
 import Foundation
 
 /// A configuration-friendly text predicate used by stable locators.
-public struct SemanticTextMatcher: Codable, Equatable, Sendable {
+public struct TextMatcher: Codable, Equatable, Sendable {
     public enum Mode: String, Codable, CaseIterable, Equatable, Sendable {
         case exact, prefix, contains
     }
@@ -52,29 +52,29 @@ public struct SemanticTextMatcher: Codable, Equatable, Sendable {
 
 /// A stable recipe that is resolved afresh against every semantic observation.
 /// It deliberately does not contain an element ID or screen coordinates.
-public struct SemanticElementLocator: Codable, Equatable, Sendable {
-    public let application: SemanticTextMatcher?
-    public let window: SemanticTextMatcher?
-    public let pageURL: SemanticTextMatcher?
-    public let role: SemanticElementRole?
-    public let label: SemanticTextMatcher?
-    public let value: SemanticTextMatcher?
-    public let ancestorRole: SemanticElementRole?
-    public let ancestorLabel: SemanticTextMatcher?
-    public let ancestorValue: SemanticTextMatcher?
+public struct ElementLocator: Codable, Equatable, Sendable {
+    public let application: TextMatcher?
+    public let window: TextMatcher?
+    public let pageURL: TextMatcher?
+    public let role: ElementRole?
+    public let label: TextMatcher?
+    public let value: TextMatcher?
+    public let ancestorRole: ElementRole?
+    public let ancestorLabel: TextMatcher?
+    public let ancestorValue: TextMatcher?
     public let ordinal: Int?
     public let requiresEnabled: Bool
 
     public init(
-        application: SemanticTextMatcher? = nil,
-        window: SemanticTextMatcher? = nil,
-        pageURL: SemanticTextMatcher? = nil,
-        role: SemanticElementRole? = nil,
-        label: SemanticTextMatcher? = nil,
-        value: SemanticTextMatcher? = nil,
-        ancestorRole: SemanticElementRole? = nil,
-        ancestorLabel: SemanticTextMatcher? = nil,
-        ancestorValue: SemanticTextMatcher? = nil,
+        application: TextMatcher? = nil,
+        window: TextMatcher? = nil,
+        pageURL: TextMatcher? = nil,
+        role: ElementRole? = nil,
+        label: TextMatcher? = nil,
+        value: TextMatcher? = nil,
+        ancestorRole: ElementRole? = nil,
+        ancestorLabel: TextMatcher? = nil,
+        ancestorValue: TextMatcher? = nil,
         ordinal: Int? = nil,
         requiresEnabled: Bool = true
     ) {
@@ -99,15 +99,15 @@ public struct SemanticElementLocator: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        application = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .application)
-        window = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .window)
-        pageURL = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .pageURL)
-        role = try values.decodeIfPresent(SemanticElementRole.self, forKey: .role)
-        label = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .label)
-        value = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .value)
-        ancestorRole = try values.decodeIfPresent(SemanticElementRole.self, forKey: .ancestorRole)
-        ancestorLabel = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .ancestorLabel)
-        ancestorValue = try values.decodeIfPresent(SemanticTextMatcher.self, forKey: .ancestorValue)
+        application = try values.decodeIfPresent(TextMatcher.self, forKey: .application)
+        window = try values.decodeIfPresent(TextMatcher.self, forKey: .window)
+        pageURL = try values.decodeIfPresent(TextMatcher.self, forKey: .pageURL)
+        role = try values.decodeIfPresent(ElementRole.self, forKey: .role)
+        label = try values.decodeIfPresent(TextMatcher.self, forKey: .label)
+        value = try values.decodeIfPresent(TextMatcher.self, forKey: .value)
+        ancestorRole = try values.decodeIfPresent(ElementRole.self, forKey: .ancestorRole)
+        ancestorLabel = try values.decodeIfPresent(TextMatcher.self, forKey: .ancestorLabel)
+        ancestorValue = try values.decodeIfPresent(TextMatcher.self, forKey: .ancestorValue)
         ordinal = try values.decodeIfPresent(Int.self, forKey: .ordinal)
         requiresEnabled = try values.decodeIfPresent(Bool.self, forKey: .requiresEnabled)
             ?? true
@@ -131,18 +131,18 @@ public struct SemanticElementLocator: Codable, Equatable, Sendable {
     }
 }
 
-struct SemanticLocatorResolution {
+struct LocatorResolution {
     enum Status {
         case matched, ambiguous, notFound, scopeMismatch, invalidLocator
     }
 
     let status: Status
-    let selected: SemanticElement?
+    let selected: ScreenElement?
     let message: String
 }
 
-extension SemanticElementLocator {
-    func resolve(in snapshot: SemanticSnapshot) -> SemanticLocatorResolution {
+extension ElementLocator {
+    func resolve(in snapshot: ScreenSemantics) -> LocatorResolution {
         if let reason = invalidReason() {
             return result(.invalidLocator, reason)
         }
@@ -150,10 +150,10 @@ extension SemanticElementLocator {
             return result(.scopeMismatch, "当前应用、窗口或页面与 locator 范围不符。")
         }
 
-        let byID = snapshot.elements.reduce(into: [String: SemanticElement]()) { elements, element in
+        let byID = snapshot.elements.reduce(into: [String: ScreenElement]()) { elements, element in
             elements[element.id] = element
         }
-        var matches = snapshot.elements.compactMap { element -> SemanticElement? in
+        var matches = snapshot.elements.compactMap { element -> ScreenElement? in
             guard role == nil || role == element.role else { return nil }
             if requiresEnabled, !element.isEnabled { return nil }
             if let label, !label.matches(element.label) { return nil }
@@ -192,7 +192,7 @@ extension SemanticElementLocator {
         return hasElementPredicate ? nil : "locator 至少需要一个元素条件。"
     }
 
-    private func scopeMatches(_ snapshot: SemanticSnapshot) -> Bool {
+    private func scopeMatches(_ snapshot: ScreenSemantics) -> Bool {
         if let application, !application.matches(snapshot.applicationName) { return false }
         if let window, !window.matches(snapshot.windowTitle) { return false }
         if let pageURL, !pageURL.matches(snapshot.pageURL ?? "") { return false }
@@ -200,8 +200,8 @@ extension SemanticElementLocator {
     }
 
     private func ancestorMatches(
-        for element: SemanticElement,
-        byID: [String: SemanticElement]
+        for element: ScreenElement,
+        byID: [String: ScreenElement]
     ) -> Bool {
         var parentID = element.parentID
         var visited = Set<String>()
@@ -217,10 +217,10 @@ extension SemanticElementLocator {
     }
 
     private func result(
-        _ status: SemanticLocatorResolution.Status,
+        _ status: LocatorResolution.Status,
         _ message: String,
-        selected: SemanticElement? = nil
-    ) -> SemanticLocatorResolution {
-        SemanticLocatorResolution(status: status, selected: selected, message: message)
+        selected: ScreenElement? = nil
+    ) -> LocatorResolution {
+        LocatorResolution(status: status, selected: selected, message: message)
     }
 }

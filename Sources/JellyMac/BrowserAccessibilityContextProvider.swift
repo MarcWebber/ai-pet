@@ -4,7 +4,7 @@ import CoreGraphics
 import Foundation
 import JellyCore
 
-public enum BrowserSemanticPolicy {
+public enum AccessibilityPolicy {
     public enum NavigationEntry: Equatable { case addressBar, spotlight }
 
     public static let supportedBundleIDs: Set<String> = [
@@ -13,7 +13,7 @@ public enum BrowserSemanticPolicy {
         "company.thebrowser.Browser", "org.mozilla.firefox"
     ]
 
-    public static func role(_ axRole: String) -> SemanticElementRole? {
+    public static func role(_ axRole: String) -> ElementRole? {
         switch axRole {
         case kAXButtonRole: .button
         case "AXLink": .link
@@ -40,7 +40,7 @@ public enum BrowserSemanticPolicy {
         _ axRole: String,
         label: String,
         identifier: String?
-    ) -> SemanticElementRole? {
+    ) -> ElementRole? {
         if isCodeEditorCandidate(role: axRole, label: label, identifier: identifier) {
             return .textField
         }
@@ -68,7 +68,7 @@ public enum BrowserSemanticPolicy {
     }
 
     public static func safeValue(
-        role: SemanticElementRole,
+        role: ElementRole,
         subrole: String?,
         value: String?
     ) -> String? {
@@ -106,7 +106,7 @@ public enum BrowserSemanticPolicy {
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
-    public static func normalizedFrame(_ frame: CGRect, displayBounds: CGRect) -> SemanticRect? {
+    public static func normalizedFrame(_ frame: CGRect, displayBounds: CGRect) -> NormalizedRect? {
         guard displayBounds.width > 0, displayBounds.height > 0 else { return nil }
         let frame = frame.intersection(displayBounds)
         guard !frame.isNull, frame.width >= 2, frame.height >= 2 else { return nil }
@@ -115,7 +115,7 @@ public enum BrowserSemanticPolicy {
         }
         let x = value(frame.minX, displayBounds.minX, displayBounds.width)
         let y = value(frame.minY, displayBounds.minY, displayBounds.height)
-        let result = SemanticRect(
+        let result = NormalizedRect(
             x: x, y: y,
             width: max(1, value(frame.maxX, displayBounds.minX, displayBounds.width) - x),
             height: max(1, value(frame.maxY, displayBounds.minY, displayBounds.height) - y)
@@ -133,7 +133,7 @@ public enum BrowserSemanticPolicy {
 }
 
 @MainActor
-public final class BrowserAccessibilityContextProvider: SemanticContextProviding {
+final class BrowserAccessibilityContextProvider {
     private struct Node {
         let element: AXUIElement
         let visibleBounds: CGRect
@@ -142,7 +142,7 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
     private struct Candidate {
         let temporaryID: Int
         let parentTemporaryID: Int?
-        let semantic: SemanticElement
+        let semantic: ScreenElement
         let element: AXUIElement
     }
     private struct Traversal {
@@ -153,9 +153,9 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
     private var observationID = UUID().uuidString.lowercased()
     private var nativeElements: [String: AXUIElement] = [:]
 
-    public init() {}
+    init() {}
 
-    public func snapshot(displayID: UInt32) async -> SemanticSnapshot? {
+    func snapshot(displayID: UInt32) async -> ScreenSemantics? {
         // AX references are intentionally valid for one observation only. Clear them even
         // when the next observation fails so an old element can never be acted upon later.
         observationID = UUID().uuidString.lowercased()
@@ -171,11 +171,11 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
         guard !visible.isNull else { return nil }
 
         let traversal = await traverse(window, displayBounds: bounds, visibleBounds: visible)
-        let text = BrowserSemanticPolicy.readableText(traversal.text)
+        let text = AccessibilityPolicy.readableText(traversal.text)
         guard !traversal.candidates.isEmpty || traversal.pageURL != nil || text != nil
         else { return nil }
 
-        var elements: [SemanticElement] = []
+        var elements: [ScreenElement] = []
         let sorted = traversal.candidates.sorted {
             ($0.semantic.frame.y, $0.semantic.frame.x)
                 < ($1.semantic.frame.y, $1.semantic.frame.x)
@@ -186,7 +186,7 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
         })
         for candidate in sorted {
             guard let elementID = assignedIDs[candidate.temporaryID] else { continue }
-            let semantic = SemanticElement(
+            let semantic = ScreenElement(
                 id: elementID,
                 parentID: candidate.parentTemporaryID.flatMap { assignedIDs[$0] },
                 role: candidate.semantic.role,
@@ -196,10 +196,10 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
             elements.append(semantic)
             currentNativeElements[elementID] = candidate.element
         }
-        let snapshot = SemanticSnapshot(
-            applicationName: BrowserSemanticPolicy.compact(app.localizedName)
+        let snapshot = ScreenSemantics(
+            applicationName: AccessibilityPolicy.compact(app.localizedName)
                 ?? app.bundleIdentifier ?? "",
-            windowTitle: BrowserSemanticPolicy.compact(window.axString(kAXTitleAttribute)) ?? "",
+            windowTitle: AccessibilityPolicy.compact(window.axString(kAXTitleAttribute)) ?? "",
             pageURL: traversal.pageURL,
             readableText: text,
             elements: elements
@@ -354,7 +354,7 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
             }
             if let role = element.axString(kAXRoleAttribute) {
                 if role == "AXWebArea", result.pageURL == nil {
-                    result.pageURL = BrowserSemanticPolicy.pageURL(
+                    result.pageURL = AccessibilityPolicy.pageURL(
                         element.axURL(kAXURLAttribute) ?? element.axURL(kAXDocumentAttribute)
                     )
                 }
@@ -362,7 +362,7 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
                    ["AXHeading", "AXStaticText"].contains(role),
                    element.axFrame?.intersects(node.visibleBounds) == true,
                    let value = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute]
-                    .compactMap({ BrowserSemanticPolicy.compact(element.axString($0)) }).first {
+                    .compactMap({ AccessibilityPolicy.compact(element.axString($0)) }).first {
                     result.text.append(value)
                 }
             }
@@ -386,22 +386,22 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
     ) -> Candidate? {
         guard let role = semanticRole(element),
               let frame = element.axFrame,
-              let normalized = BrowserSemanticPolicy.normalizedFrame(
+              let normalized = AccessibilityPolicy.normalizedFrame(
                   frame.intersection(visibleBounds), displayBounds: displayBounds
               ) else { return nil }
-        let value = BrowserSemanticPolicy.safeValue(
+        let value = AccessibilityPolicy.safeValue(
             role: role,
             subrole: element.axString(kAXSubroleAttribute),
             value: element.axString(kAXValueAttribute)
         )
         let label = element.axLabel.isEmpty
-            ? BrowserSemanticPolicy.compact(value) ?? ""
+            ? AccessibilityPolicy.compact(value) ?? ""
             : element.axLabel
         guard shouldExpose(role: role, label: label, value: value) else { return nil }
         return Candidate(
             temporaryID: temporaryID,
             parentTemporaryID: parentTemporaryID,
-            semantic: SemanticElement(
+            semantic: ScreenElement(
                 id: "", role: role, label: label, value: value,
                 frame: normalized,
                 isEnabled: element.axBool(kAXEnabledAttribute) != false
@@ -410,19 +410,19 @@ public final class BrowserAccessibilityContextProvider: SemanticContextProviding
         )
     }
 
-    private func semanticRole(_ element: AXUIElement) -> SemanticElementRole? {
+    private func semanticRole(_ element: AXUIElement) -> ElementRole? {
         guard let role = element.axString(kAXRoleAttribute) else { return nil }
         if ["AXDialog", "AXSheet"].contains(element.axString(kAXSubroleAttribute)) {
             return .dialog
         }
-        return BrowserSemanticPolicy.role(
+        return AccessibilityPolicy.role(
             role, label: element.axLabel,
             identifier: element.axString("AXIdentifier")
         )
     }
 
     private func shouldExpose(
-        role: SemanticElementRole,
+        role: ElementRole,
         label: String,
         value: String?
     ) -> Bool {
@@ -471,7 +471,7 @@ private extension AXUIElement {
     }
     var axLabel: String {
         [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute, kAXPlaceholderValueAttribute]
-            .compactMap { BrowserSemanticPolicy.compact(axString($0)) }.first ?? ""
+            .compactMap { AccessibilityPolicy.compact(axString($0)) }.first ?? ""
     }
     private func axAXValue(_ name: String) -> AXValue? {
         guard let value = axValue(name), CFGetTypeID(value) == AXValueGetTypeID()

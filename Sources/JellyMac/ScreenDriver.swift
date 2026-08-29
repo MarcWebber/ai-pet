@@ -12,61 +12,80 @@ public protocol ScreenCapturingBackend: AnyObject {
     ) async throws -> CGImage
 }
 
-public final class ScreenCaptureService: CaptureService {
-    public let prefersSemanticObservation = false
+/// The only product-level screen implementation. Observation is always an
+/// explicit, silent full-display capture plus a fresh Accessibility snapshot.
+@MainActor
+public final class ScreenDriver: ScreenDriving {
     public let backend: ScreenCapturingBackend
-    private let temporaryRoot: URL
+    private let semantics: BrowserAccessibilityContextProvider
+    private let actions: CGEventScreenActionExecutor
 
     public init(
-        backend: ScreenCapturingBackend,
-        temporaryRoot: URL = FileManager.default.temporaryDirectory
+        backend: ScreenCapturingBackend = FullDisplayBackend(),
+        typingSpeedPercent: @escaping () -> Int = {
+            TypingRhythm.defaultSpeedPercent
+        }
     ) {
-        self.backend = backend; self.temporaryRoot = temporaryRoot
+        self.backend = backend
+        let semantics = BrowserAccessibilityContextProvider()
+        self.semantics = semantics
+        actions = CGEventScreenActionExecutor(
+            semanticProvider: semantics,
+            typingSpeedPercent: typingSpeedPercent
+        )
     }
 
-    public func capture(displayID: UInt32) async throws -> CaptureArtifact {
-        let image: CGImage
-        do {
-            image = try await backend.captureFullDisplay(
-                displayID: displayID,
-                maximumDimension: AppMetadata.maximumScreenshotDimension
-            )
-        } catch { throw error as? PetFailure ?? .captureFailed }
+    public func observe(displayID: UInt32) async throws -> ScreenObservation {
+        let image = try await backend.captureFullDisplay(
+            displayID: displayID,
+            maximumDimension: AppMetadata.maximumScreenshotDimension
+        )
         try Task.checkCancellation()
-        let directory = temporaryRoot.appendingPathComponent(
-            "JellyPet-Capture-\(UUID().uuidString)", isDirectory: true
+        let semantic = await semantics.snapshot(displayID: displayID)
+        return ScreenObservation(
+            displayID: displayID,
+            semantics: semantic,
+            screenshotPNG: try Self.pngData(image)
         )
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
+    }
+
+    public func execute(
+        _ action: ScreenAction,
+        observation: ScreenObservation,
+        displayID: UInt32
+    ) async throws {
+        guard observation.displayID == displayID else {
+            throw PetFailure.selectedDisplayUnavailable
+        }
+        try await actions.execute(
+            action,
+            snapshot: observation.semantics,
+            displayID: displayID
         )
-        let url = directory.appendingPathComponent("screen.png")
-        guard let destination = CGImageDestinationCreateWithURL(
-            url as CFURL, UTType.png.identifier as CFString, 1, nil
+    }
+
+    public func cancel() { actions.cancel() }
+
+    private static func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.png.identifier as CFString,
+            1,
+            nil
         ) else { throw PetFailure.captureFailed }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
-            try? FileManager.default.removeItem(at: directory)
             throw PetFailure.captureFailed
         }
-        return CaptureArtifact(imageURL: url, sessionDirectoryURL: directory)
+        return data as Data
     }
 }
 
-public final class CaptureArtifactCleaner: CaptureCleaning {
-    private let root: URL
-    public init(allowedRoot: URL = FileManager.default.temporaryDirectory) {
-        root = allowedRoot.standardizedFileURL
-    }
-    public func remove(_ artifact: CaptureArtifact) {
-        let directory = artifact.sessionDirectoryURL.standardizedFileURL
-        guard directory.deletingLastPathComponent() == root,
-              directory.lastPathComponent.hasPrefix("JellyPet-Capture-") else { return }
-        try? FileManager.default.removeItem(at: directory)
-    }
-}
-
-public final class ScreenCaptureCLIBackend: ScreenCapturingBackend {
+/// Low-level full-display backend used by ScreenDriver and the display picker.
+/// It never invokes `screencapture`, sends a keyboard shortcut, or enters an
+/// interactive selection mode.
+public final class FullDisplayBackend: ScreenCapturingBackend {
     public init() {}
 
     public func availableDisplays() async throws -> [DisplayDescriptor] {
@@ -89,37 +108,19 @@ public final class ScreenCaptureCLIBackend: ScreenCapturingBackend {
         guard CGPreflightScreenCaptureAccess() else {
             throw PetFailure.screenCapturePermissionRequired
         }
-        let displays = try onlineDisplayIDs()
-        guard let index = displays.firstIndex(of: displayID) else {
+        guard try onlineDisplayIDs().contains(displayID) else {
             throw PetFailure.selectedDisplayUnavailable
         }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "JellyPet-FullDisplay-\(UUID().uuidString).png"
-        )
-        defer { try? FileManager.default.removeItem(at: url) }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        process.arguments = ["-x", "-C", "-D\(index + 1)", "-tpng", url.path]
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
+        guard let image = CGDisplayCreateImage(displayID) else {
             throw PetFailure.captureFailed
         }
-        guard process.terminationStatus == 0,
-              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { throw PetFailure.captureFailed }
         return try scaled(image, maximumDimension: maximumDimension)
     }
 
     private func onlineDisplayIDs() throws -> [CGDirectDisplayID] {
         var count: UInt32 = 0
         guard CGGetOnlineDisplayList(0, nil, &count) == .success,
-              count > 0 else {
-            throw PetFailure.noDisplaysAvailable
-        }
+              count > 0 else { throw PetFailure.noDisplaysAvailable }
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetOnlineDisplayList(count, &ids, &count) == .success else {
             throw PetFailure.noDisplaysAvailable

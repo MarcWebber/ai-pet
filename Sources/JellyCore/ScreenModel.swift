@@ -17,13 +17,13 @@ public enum KeyModifier: String, Codable, CaseIterable, Hashable, Sendable {
 public enum ScreenAction: Equatable, Sendable {
     public static let maximumScrollDelta = 420
 
-    case click(ScreenActionTarget)
-    case doubleClick(ScreenActionTarget)
+    case click(ElementTarget)
+    case doubleClick(ElementTarget)
     case drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMilliseconds: Int)
-    case typeText(target: ScreenActionTarget, text: String)
+    case typeText(target: ElementTarget, text: String)
     case keyPress(key: ScreenKey, modifiers: [KeyModifier])
     case navigate(url: String)
-    case scroll(target: ScreenActionTarget?, deltaX: Int, deltaY: Int)
+    case scroll(target: ElementTarget?, deltaX: Int, deltaY: Int)
     case wait(milliseconds: Int)
 
     var kind: ScreenActionKind {
@@ -89,7 +89,7 @@ public enum ScreenAction: Equatable, Sendable {
     }
 }
 
-private extension ScreenActionTarget {
+private extension ElementTarget {
     func validate() throws {
         switch self {
         case let .visual(x, y):
@@ -112,8 +112,8 @@ extension ScreenAction: Codable {
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         switch try values.decode(ScreenActionKind.self, forKey: .kind) {
-        case .click: self = .click(try values.decode(ScreenActionTarget.self, forKey: .target))
-        case .doubleClick: self = .doubleClick(try values.decode(ScreenActionTarget.self, forKey: .target))
+        case .click: self = .click(try values.decode(ElementTarget.self, forKey: .target))
+        case .doubleClick: self = .doubleClick(try values.decode(ElementTarget.self, forKey: .target))
         case .drag:
             self = .drag(
                 fromX: try values.decode(Int.self, forKey: .fromX),
@@ -124,7 +124,7 @@ extension ScreenAction: Codable {
             )
         case .typeText:
             self = .typeText(
-                target: try values.decode(ScreenActionTarget.self, forKey: .target),
+                target: try values.decode(ElementTarget.self, forKey: .target),
                 text: try values.decode(String.self, forKey: .text)
             )
         case .keyPress:
@@ -135,7 +135,7 @@ extension ScreenAction: Codable {
         case .navigate: self = .navigate(url: try values.decode(String.self, forKey: .url))
         case .scroll:
             self = .scroll(
-                target: try values.decodeIfPresent(ScreenActionTarget.self, forKey: .target),
+                target: try values.decodeIfPresent(ElementTarget.self, forKey: .target),
                 deltaX: try values.decode(Int.self, forKey: .deltaX),
                 deltaY: try values.decode(Int.self, forKey: .deltaY)
             )
@@ -181,7 +181,7 @@ public struct TakeoverRequest: Equatable, Sendable {
     }
 }
 
-public enum TakeoverPhase: Equatable, Sendable {
+public enum SessionPhase: Equatable, Sendable {
     case idle, capturing, deciding, locating, executing
     case verifying, finished, cancelled, error
 
@@ -211,17 +211,17 @@ public enum PetActivity: String, CaseIterable, Equatable, Sendable {
     }
 }
 
-public struct TakeoverEvent: Equatable, Sendable {
+public struct ActivityEvent: Equatable, Sendable {
     public let activity: PetActivity
     public let message: String
-    public let kind: TakeoverEventKind
+    public let kind: ActivityEventKind
     public let sequence: Int?
     public let details: String?
 
     public init(
         activity: PetActivity,
         message: String,
-        kind: TakeoverEventKind = .status,
+        kind: ActivityEventKind = .status,
         sequence: Int? = nil,
         details: String? = nil
     ) {
@@ -230,42 +230,50 @@ public struct TakeoverEvent: Equatable, Sendable {
     }
 }
 
-public enum TakeoverEventKind: String, Equatable, Sendable {
+public enum ActivityEventKind: String, Equatable, Sendable {
     case status, observation, action, outcome, userInstruction
 }
 
-public struct TakeoverMetrics: Equatable, Sendable {
-    public let durationSeconds: Double
-    public let actionCount: Int
-    public let observationCount: Int
-
-    public init(durationSeconds: Double, actionCount: Int, observationCount: Int) {
-        self.durationSeconds = durationSeconds
-        self.actionCount = actionCount
-        self.observationCount = observationCount
-    }
+public enum SessionMode: String, Equatable, Sendable {
+    case idle, answering, takingOver, presentingAnswer, presentingTakeover
 }
 
-public struct TakeoverSnapshot: Equatable, Sendable {
-    public let phase: TakeoverPhase
+public struct SessionSnapshot: Equatable, Sendable {
+    public let mode: SessionMode
+    public let phase: SessionPhase
     public let message: String?
     public let failure: PetFailure?
-    public let events: [TakeoverEvent]
-    public let metrics: TakeoverMetrics?
+    public let events: [ActivityEvent]
+    public let request: TakeoverRequest?
+
+    public init(
+        mode: SessionMode,
+        phase: SessionPhase,
+        message: String? = nil,
+        failure: PetFailure? = nil,
+        events: [ActivityEvent] = [],
+        request: TakeoverRequest? = nil
+    ) {
+        self.mode = mode
+        self.phase = phase
+        self.message = message
+        self.failure = failure
+        self.events = events
+        self.request = request
+    }
+
     public var activity: PetActivity { phase.activity }
     public var isActive: Bool {
-        switch phase {
-        case .capturing, .deciding, .locating, .executing, .verifying: true
-        default: false
-        }
+        mode == .answering || mode == .takingOver
     }
+    public var isTakingOver: Bool { mode == .takingOver }
 }
 
 extension ScreenAction {
     /// Resolves stable locator recipes against one current observation. The returned action
     /// contains only observation-scoped element IDs and must not be reused after the UI changes.
     public func resolvingSemanticTargets(
-        in snapshot: SemanticSnapshot?
+        in snapshot: ScreenSemantics?
     ) throws -> ScreenAction {
         switch self {
         case let .click(target):
@@ -309,8 +317,8 @@ extension ScreenAction {
     }
 }
 
-private extension ScreenActionTarget {
-    func resolved(in snapshot: SemanticSnapshot?) throws -> ScreenActionTarget {
+private extension ElementTarget {
+    func resolved(in snapshot: ScreenSemantics?) throws -> ElementTarget {
         guard case let .locator(locator) = self else { return self }
         guard let snapshot else {
             throw PetFailure.semanticLocatorFailed("当前观察没有语义元素。")

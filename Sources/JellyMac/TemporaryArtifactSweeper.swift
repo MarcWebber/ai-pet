@@ -3,11 +3,7 @@ import Foundation
 public final class TemporaryArtifactSweeper {
     private let allowedRoot: URL
     private let minimumAge: TimeInterval
-    private let allowedPrefixes = [
-        "JellyPet-Capture-",
-        "JellyPet-Codex-",
-        "JellyPet-Agent-"
-    ]
+    private let allowedPrefix = "JellyPet-Codex-"
 
     public init(
         allowedRoot: URL = FileManager.default.temporaryDirectory,
@@ -32,9 +28,7 @@ public final class TemporaryArtifactSweeper {
             let candidate = child.standardizedFileURL
             guard
                 candidate.deletingLastPathComponent() == allowedRoot,
-                allowedPrefixes.contains(where: {
-                    candidate.lastPathComponent.hasPrefix($0)
-                }),
+                candidate.lastPathComponent.hasPrefix(allowedPrefix),
                 let values = try? candidate.resourceValues(
                     forKeys: [.contentModificationDateKey]
                 ),

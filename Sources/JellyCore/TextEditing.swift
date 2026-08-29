@@ -1,6 +1,6 @@
 import Foundation
 
-public struct HumanTypingStroke: Codable, Equatable, Sendable {
+public struct TypingStroke: Codable, Equatable, Sendable {
     public let text: String
     public let mistypedText: String?
     public let mistakeDelayMilliseconds: Int
@@ -22,27 +22,26 @@ public struct HumanTypingStroke: Codable, Equatable, Sendable {
     }
 }
 
-public enum HumanTextEdit: Equatable, Sendable {
-    case currentTextUnavailable
+public enum TextEditPlan: Equatable, Sendable {
     case unchanged
-    case replaceRange(
+    case replace(
         location: Int,
         length: Int,
         text: String
     )
 }
 
-public enum HumanTextEditPlan {
+public enum TextEditing {
     public static func make(
         currentText: String?,
         desiredText: String
-    ) -> HumanTextEdit {
+    ) -> TextEditPlan? {
         let desired = normalize(desiredText)
-        guard let currentText else { return .currentTextUnavailable }
+        guard let currentText else { return nil }
         let current = normalize(currentText)
         guard current != desired else { return .unchanged }
 
-        let old = Array(current.utf16), new = Array(desired.utf16)
+        let old = Array(current), new = Array(desired)
         let sharedLimit = min(old.count, new.count)
         var prefixCount = 0
         while prefixCount < sharedLimit,
@@ -55,15 +54,12 @@ public enum HumanTextEditPlan {
                 == new[new.count - suffixCount - 1] {
             suffixCount += 1
         }
-        let removedEnd = old.count - suffixCount
-        let replacementEnd = new.count - suffixCount
-        return .replaceRange(
-            location: prefixCount,
-            length: removedEnd - prefixCount,
-            text: String(
-                decoding: new[prefixCount..<replacementEnd],
-                as: UTF16.self
-            )
+        let oldEnd = old.count - suffixCount
+        let newEnd = new.count - suffixCount
+        return .replace(
+            location: String(old[..<prefixCount]).utf16.count,
+            length: String(old[prefixCount..<oldEnd]).utf16.count,
+            text: String(new[prefixCount..<newEnd])
         )
     }
 
@@ -73,7 +69,7 @@ public enum HumanTextEditPlan {
     }
 }
 
-public enum HumanTypingPlan {
+public enum TypingRhythm {
     public static let minimumSpeedPercent = 40
     public static let maximumSpeedPercent = 160
     public static let defaultSpeedPercent = 80
@@ -82,7 +78,7 @@ public enum HumanTypingPlan {
         for text: String,
         seed: UInt64,
         speedPercent: Int = defaultSpeedPercent
-    ) -> [HumanTypingStroke] {
+    ) -> [TypingStroke] {
         var random = TypingRandom(seed: seed)
         var eligibleUntilMistake = random.value(in: 72...132)
         return text.map { character in
@@ -98,7 +94,7 @@ public enum HumanTypingPlan {
             } else {
                 mistyped = nil
             }
-            return HumanTypingStroke(
+            return TypingStroke(
                 text: value,
                 mistypedText: mistyped,
                 mistakeDelayMilliseconds: scaled(

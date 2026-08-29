@@ -5,26 +5,26 @@ import Foundation
 import JellyCore
 
 @MainActor
-public final class CGEventScreenActionExecutor: ScreenActionExecuting {
+final class CGEventScreenActionExecutor {
     private let semanticProvider: BrowserAccessibilityContextProvider
     private let typingSpeedPercent: () -> Int
     private let source = CGEventSource(stateID: .privateState)
     private let mouseLock = NSLock()
     private var activeMouseUpPoint: CGPoint?
 
-    public init(
+    init(
         semanticProvider: BrowserAccessibilityContextProvider,
         typingSpeedPercent: @escaping () -> Int = {
-            HumanTypingPlan.defaultSpeedPercent
+            TypingRhythm.defaultSpeedPercent
         }
     ) {
         self.semanticProvider = semanticProvider
         self.typingSpeedPercent = typingSpeedPercent
     }
 
-    public func execute(
+    func execute(
         _ action: ScreenAction,
-        snapshot: SemanticSnapshot?,
+        snapshot: ScreenSemantics?,
         displayID: UInt32
     ) async throws {
         try action.validate()
@@ -62,7 +62,7 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
             let bundleID = await MainActor.run {
                 NSWorkspace.shared.frontmostApplication?.bundleIdentifier
             }
-            let key: ScreenKey = BrowserSemanticPolicy.navigationEntry(
+            let key: ScreenKey = AccessibilityPolicy.navigationEntry(
                 frontmostBundleID: bundleID
             ) == .addressBar ? .l : .space
             try keyPress(key, [.command]); try await pause(400)
@@ -78,11 +78,11 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         }
     }
 
-    public func cancel() { releaseMouseIfNeeded() }
+    func cancel() { releaseMouseIfNeeded() }
 
     private func nativeElement(
-        _ target: ScreenActionTarget,
-        snapshot: SemanticSnapshot?
+        _ target: ElementTarget,
+        snapshot: ScreenSemantics?
     ) throws -> AXUIElement? {
         guard case let .element(elementID) = target else { return nil }
         guard snapshot?.elements.contains(where: {
@@ -100,8 +100,8 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     }
 
     private func performSemanticActivation(
-        _ target: ScreenActionTarget,
-        snapshot: SemanticSnapshot?
+        _ target: ElementTarget,
+        snapshot: ScreenSemantics?
     ) throws -> Bool {
         guard let element = try nativeElement(target, snapshot: snapshot) else { return false }
         guard let actions = axActions(element) else { return false }
@@ -118,8 +118,8 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
     }
 
     private func coordinate(
-        _ target: ScreenActionTarget,
-        _ snapshot: SemanticSnapshot?,
+        _ target: ElementTarget,
+        _ snapshot: ScreenSemantics?,
         in bounds: CGRect
     ) throws -> CGPoint {
         switch target {
@@ -137,23 +137,23 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 in: bounds
             )
         case .locator:
-            // Stable locators are resolved by TakeoverCoordinator against the current
+            // Stable locators are resolved by SessionController against the current
             // observation before reaching a platform executor.
             throw PetFailure.semanticTargetUnavailable
         }
     }
 
     private func semanticValue(
-        for target: ScreenActionTarget,
-        snapshot: SemanticSnapshot?
+        for target: ElementTarget,
+        snapshot: ScreenSemantics?
     ) -> String? {
         guard case let .element(elementID) = target else { return nil }
         return snapshot?.elements.first(where: { $0.id == elementID })?.value
     }
 
     private func focusTextTarget(
-        _ target: ScreenActionTarget,
-        snapshot: SemanticSnapshot?,
+        _ target: ElementTarget,
+        snapshot: ScreenSemantics?,
         bounds: CGRect
     ) async throws -> AXUIElement {
         guard let element = try nativeElement(target, snapshot: snapshot) else {
@@ -328,14 +328,12 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         _ text: String,
         focusedElement: AXUIElement? = nil
     ) async throws {
-        let strokes = HumanTypingPlan.strokes(
+        let strokes = TypingRhythm.strokes(
             for: text,
             seed: UInt64.random(in: 1...UInt64.max),
             speedPercent: typingSpeedPercent()
         )
-        var index = 0
-        while index < strokes.count {
-            let stroke = strokes[index]
+        for stroke in strokes {
             try Task.checkCancellation()
             if let focusedElement { try ensureTypingProcess(focusedElement) }
             if let mistake = stroke.mistypedText {
@@ -347,178 +345,42 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
                 try keyPress(.delete, [])
                 try await pause(stroke.correctionDelayMilliseconds)
             }
-            if stroke.text == "\n" {
-                try keyPress(.return, [])
-                try await pause(stroke.delayAfterMilliseconds)
-                index += 1
-                guard let focusedElement else { continue }
-                var desiredIndent = ""
-                while index < strokes.count,
-                      strokes[index].text == " "
-                        || strokes[index].text == "\t" {
-                    desiredIndent += strokes[index].text
-                    index += 1
-                }
-                try await matchAutomaticIndentation(
-                    desiredIndent,
-                    focusedElement: focusedElement
-                )
-            } else {
-                try emit(stroke.text)
-                if stroke.text == "{", let focusedElement {
-                    try await pause(50)
-                    try await removeAutoClosedBrace(
-                        focusedElement: focusedElement
-                    )
-                }
-                try await pause(stroke.delayAfterMilliseconds)
-                index += 1
-            }
+            // Newlines are Unicode text events, never physical Return key events.
+            // This keeps global shortcut managers (including Feishu capture)
+            // completely outside the typing path.
+            try emit(stroke.text)
+            try await pause(stroke.delayAfterMilliseconds)
         }
-    }
-
-    private func removeAutoClosedBrace(
-        focusedElement: AXUIElement
-    ) async throws {
-        try ensureTypingProcess(focusedElement)
-        var rawValue: CFTypeRef?, rawSelection: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            focusedElement,
-            kAXValueAttribute as CFString,
-            &rawValue
-        ) == .success,
-              let value = rawValue as? String,
-              AXUIElementCopyAttributeValue(
-                  focusedElement,
-                  kAXSelectedTextRangeAttribute as CFString,
-                  &rawSelection
-              ) == .success,
-              let rawSelection,
-              CFGetTypeID(rawSelection) == AXValueGetTypeID() else {
-            throw PetFailure.inputFocusChanged
-        }
-        let selectionValue = unsafeBitCast(rawSelection, to: AXValue.self)
-        var selection = CFRange()
-        let units = Array(value.utf16)
-        guard AXValueGetValue(selectionValue, .cfRange, &selection),
-              selection.length == 0,
-              selection.location >= 0,
-              selection.location <= units.count else {
-            throw PetFailure.inputFocusChanged
-        }
-        guard selection.location < units.count,
-              units[selection.location] == 125 else { return }
-        try keyPress(.forwardDelete, [])
-        try await pause(45)
-    }
-
-    private func matchAutomaticIndentation(
-        _ desired: String,
-        focusedElement: AXUIElement
-    ) async throws {
-        let wanted = Array(desired)
-        for _ in 0..<64 {
-            try ensureTypingProcess(focusedElement)
-            let current = Array(try automaticIndentation(
-                focusedElement: focusedElement
-            ))
-            if current == wanted { return }
-            var shared = 0
-            while shared < min(current.count, wanted.count),
-                  current[shared] == wanted[shared] {
-                shared += 1
-            }
-            if current.count > shared {
-                try keyPress(.delete, [])
-                try await pause(45)
-            } else if wanted.count > shared {
-                try emit(String(wanted[shared]))
-                try await pause(45)
-            } else {
-                throw PetFailure.inputFocusChanged
-            }
-        }
-        throw PetFailure.inputFocusChanged
-    }
-
-    private func automaticIndentation(
-        focusedElement: AXUIElement
-    ) throws -> String {
-        var rawValue: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            focusedElement,
-            kAXValueAttribute as CFString,
-            &rawValue
-        ) == .success,
-              let value = rawValue as? String else {
-            throw PetFailure.editorTextUnavailable
-        }
-        var rawSelection: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            focusedElement,
-            kAXSelectedTextRangeAttribute as CFString,
-            &rawSelection
-        ) == .success,
-              let rawSelection,
-              CFGetTypeID(rawSelection) == AXValueGetTypeID() else {
-            throw PetFailure.inputFocusChanged
-        }
-        let selectionValue = unsafeBitCast(rawSelection, to: AXValue.self)
-        var selection = CFRange()
-        guard AXValueGetValue(selectionValue, .cfRange, &selection),
-              selection.length == 0 else {
-            throw PetFailure.inputFocusChanged
-        }
-        let units = Array(value.utf16)
-        guard selection.location >= 0,
-              selection.location <= units.count else {
-            throw PetFailure.inputFocusChanged
-        }
-        let cursor = selection.location
-        let lineStart = units[..<cursor].lastIndex(of: 10).map { $0 + 1 } ?? 0
-        let automatic = String(
-            decoding: units[lineStart..<cursor],
-            as: UTF16.self
-        )
-        guard automatic.allSatisfy({ $0 == " " || $0 == "\t" }) else {
-            throw PetFailure.inputFocusChanged
-        }
-        return automatic
     }
 
     private func insert(
         _ text: String,
         focusedElement: AXUIElement
     ) async throws {
-        let desired = HumanTextEditPlan.normalize(text)
-        try ensureFocused(focusedElement)
-        let current = HumanTextEditPlan.normalize(
-            try editorText(focusedElement)
-        )
-        switch HumanTextEditPlan.make(
-            currentText: current,
-            desiredText: desired
-        ) {
-        case .currentTextUnavailable:
-            throw PetFailure.editorTextUnavailable
-        case .unchanged:
-            return
-        case let .replaceRange(location, length, value):
+        let desired = TextEditing.normalize(text)
+        var seen = Set<String>()
+        while true {
+            try ensureFocused(focusedElement)
+            let current = TextEditing.normalize(
+                try editorText(focusedElement)
+            )
+            guard current != desired else { return }
+            guard seen.insert(current).inserted, seen.count <= 12 else {
+                throw PetFailure.screenActionFailed
+            }
+            guard case let .replace(location, length, value)
+                    = TextEditing.make(
+                        currentText: current,
+                        desiredText: desired
+                    ) else { return }
             try selectTextRange(
                 location: location,
                 length: length,
                 focusedElement: focusedElement
             )
-            if value.isEmpty {
-                try keyPress(.delete, [])
-            } else {
-                try await type(value, focusedElement: focusedElement)
-            }
-        }
-        try await pause(300)
-        guard HumanTextEditPlan.normalize(try editorText(focusedElement))
-            == desired else {
-            throw PetFailure.screenActionFailed
+            if value.isEmpty { try keyPress(.delete, []) }
+            else { try await type(value, focusedElement: focusedElement) }
+            try await pause(180)
         }
     }
 
@@ -567,6 +429,7 @@ public final class CGEventScreenActionExecutor: ScreenActionExecuting {
         utf16.withUnsafeBufferPointer { buffer in
             guard let address = buffer.baseAddress else { return }
             events.forEach {
+                $0.flags = []
                 $0.keyboardSetUnicodeString(
                     stringLength: buffer.count,
                     unicodeString: address

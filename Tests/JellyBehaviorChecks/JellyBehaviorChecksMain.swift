@@ -11,18 +11,28 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 }
 
 @MainActor
-private final class StubCapture: CaptureService {
-    let prefersSemanticObservation = false
+private final class StubScreen: ScreenDriving {
+    private(set) var observations = 0
 
-    func capture(displayID: UInt32) async throws -> CaptureArtifact {
-        CaptureArtifact(
-            imageURL: URL(fileURLWithPath: "/private/tmp/jelly-memory-check.png"),
-            sessionDirectoryURL: URL(fileURLWithPath: "/private/tmp")
+    func observe(displayID: UInt32) async throws -> ScreenObservation {
+        observations += 1
+        return ScreenObservation(
+            displayID: displayID,
+            semantics: nil,
+            screenshotPNG: Data([0x89, 0x50, 0x4E, 0x47])
         )
     }
+
+    func execute(
+        _ action: ScreenAction,
+        observation: ScreenObservation,
+        displayID: UInt32
+    ) async throws {}
+
+    func cancel() {}
 }
 
-private final class StubResponder: AIResponder {
+private final class StubResponder: CodexServing {
     private(set) var requests: [CodexRequest] = []
     private(set) var prepareCount = 0
     private(set) var resetCount = 0
@@ -40,10 +50,6 @@ private final class StubResponder: AIResponder {
     func prepareForNextTurn() async { prepareCount += 1 }
     func resetSession() async { resetCount += 1 }
     func cancel() {}
-}
-
-private final class StubCleaner: CaptureCleaning {
-    func remove(_ artifact: CaptureArtifact) {}
 }
 
 private final class FullDisplayCaptureProbe: ScreenCapturingBackend {
@@ -71,29 +77,17 @@ private final class FullDisplayCaptureProbe: ScreenCapturingBackend {
     }
 }
 
-@MainActor
-private final class StubExecutor: ScreenActionExecuting {
-    func execute(
-        _ action: ScreenAction,
-        snapshot: SemanticSnapshot?,
-        displayID: UInt32
-    ) async throws {}
-
-    func cancel() {}
-}
-
 @main
 private enum JellyBehaviorChecksMain {
     @MainActor
     static func main() async throws {
-        try runElementLocatorChecks()
-        runHumanTypingChecks()
+        try runLocatorChecks()
+        runTextEditingChecks()
         await runActionGroupToolChecks()
 
         let captureProbe = FullDisplayCaptureProbe()
-        let captureService = ScreenCaptureService(backend: captureProbe)
-        let captureArtifact = try await captureService.capture(displayID: 73)
-        defer { CaptureArtifactCleaner().remove(captureArtifact) }
+        let captureService = ScreenDriver(backend: captureProbe)
+        let captureArtifact = try await captureService.observe(displayID: 73)
         check(
             captureProbe.request?.displayID == 73
                 && captureProbe.request?.maximumDimension
@@ -101,11 +95,11 @@ private enum JellyBehaviorChecksMain {
             "screen capture must request one exact full display without a region"
         )
         check(
-            FileManager.default.fileExists(atPath: captureArtifact.imageURL.path),
-            "full-display capture must produce a PNG artifact"
+            captureArtifact.screenshotPNG?.isEmpty == false,
+            "full-display capture must produce in-memory PNG data"
         )
         if ProcessInfo.processInfo.environment["JELLY_VERIFY_LIVE_CAPTURE"] == "1" {
-            let liveBackend = ScreenCaptureCLIBackend()
+            let liveBackend = FullDisplayBackend()
             let displays = try await liveBackend.availableDisplays()
             guard let display = displays.first(where: \.isPrimary)
                 ?? displays.first else {
@@ -122,7 +116,7 @@ private enum JellyBehaviorChecksMain {
         }
 
         check(
-            BrowserSemanticPolicy.isCodeEditorCandidate(
+            AccessibilityPolicy.isCodeEditorCandidate(
                 role: "AXGroup",
                 label: "Editor content",
                 identifier: "monaco-editor"
@@ -130,7 +124,7 @@ private enum JellyBehaviorChecksMain {
             "Monaco editor group should be an editor candidate"
         )
         check(
-            !BrowserSemanticPolicy.isCodeEditorCandidate(
+            !AccessibilityPolicy.isCodeEditorCandidate(
                 role: "AXGroup",
                 label: "Question panel",
                 identifier: "content"
@@ -138,7 +132,7 @@ private enum JellyBehaviorChecksMain {
             "ordinary groups must not become editor candidates"
         )
         check(
-            BrowserSemanticPolicy.role(
+            AccessibilityPolicy.role(
                 "AXWebArea",
                 label: "Code editor",
                 identifier: "monaco-editor"
@@ -222,7 +216,7 @@ private enum JellyBehaviorChecksMain {
         )
         check(
             preferences.typingSpeedPercent
-                == HumanTypingPlan.defaultSpeedPercent,
+                == TypingRhythm.defaultSpeedPercent,
             "new installs must use the slightly slower human typing speed"
         )
         preferences.typingSpeedPercent = 120
@@ -316,12 +310,8 @@ private enum JellyBehaviorChecksMain {
             "the custom sprite sheet must be resettable"
         )
         let responder = StubResponder()
-        let coordinator = TakeoverCoordinator(
-            capture: StubCapture(),
-            responder: responder,
-            cleaner: StubCleaner(),
-            executor: StubExecutor()
-        )
+        let screen = StubScreen()
+        let coordinator = SessionController(codex: responder, screen: screen)
         let screenPreferences = AssistantPreferences(
             model: AssistantPreferences.defaultModel,
             reasoningEffort: .high,
@@ -391,13 +381,13 @@ private enum JellyBehaviorChecksMain {
                 .appendingPathComponent(
                     "Sources/JellyApp/Resources/Skills/jellypet-takeover/SKILL.md"
                 )
-            let liveResponder = CodexProcessResponder(
+            let liveResponder = CodexClient(
                 executableURL: executableURL,
                 skillURL: skillURL
             )
             let answer = try await liveResponder.respond(
                 to: CodexRequest(
-                    imageURL: nil,
+                    imagePNG: nil,
                     prompt: "这是 JellyPet 0.9.2 Codex 连通性测试。只回复 JELLY_CODEX_OK。",
                     model: AssistantPreferences.defaultModel,
                     reasoningEffort: .low
@@ -411,6 +401,40 @@ private enum JellyBehaviorChecksMain {
                 "Codex must complete a real model round trip"
             )
             await liveResponder.resetSession()
+        }
+
+        if ProcessInfo.processInfo.environment["JELLY_REAL_CODEX_TOOL_SMOKE"] == "1" {
+            guard let executableURL = CodexExecutableLocator.locate() else {
+                fputs("FAILED: Codex was not detected\n", stderr)
+                exit(EXIT_FAILURE)
+            }
+            let skillURL = URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath
+            ).appendingPathComponent(
+                "Sources/JellyApp/Resources/Skills/jellypet-takeover/SKILL.md"
+            )
+            let probe = FullDisplayCaptureProbe()
+            let controller = SessionController(
+                codex: CodexClient(
+                    executableURL: executableURL,
+                    skillURL: skillURL
+                ),
+                screen: ScreenDriver(backend: probe)
+            )
+            await controller.start(TakeoverRequest(
+                displayID: 73,
+                task: "先且只调用一次 observe；观察成功后只回复 JELLY_TOOL_OK，不执行其他动作。",
+                assistantPreferences: .init(
+                    model: AssistantPreferences.defaultModel,
+                    reasoningEffort: .low
+                )
+            ))
+            check(
+                probe.request?.displayID == 73
+                    && controller.snapshot.phase == .finished
+                    && controller.snapshot.message?.contains("JELLY_TOOL_OK") == true,
+                "Codex dynamic screen tools must complete a real observe round trip"
+            )
         }
 
         print("Jelly behavior checks passed")

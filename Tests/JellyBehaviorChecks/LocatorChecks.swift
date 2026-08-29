@@ -1,17 +1,17 @@
 import Foundation
 import JellyCore
 
-func runElementLocatorChecks() throws {
+func runLocatorChecks() throws {
     let scopedSnapshot = locatorSnapshot(elements: [
         locatorElement("e1", role: .textField, label: "Search people"),
         locatorElement("e2", role: .button, label: "Send")
     ])
-    let scoped = SemanticElementLocator(
-        application: SemanticTextMatcher("Messages"),
-        window: SemanticTextMatcher("Alice", mode: .contains),
-        pageURL: SemanticTextMatcher("chat/42", mode: .contains),
+    let scoped = ElementLocator(
+        application: TextMatcher("Messages"),
+        window: TextMatcher("Alice", mode: .contains),
+        pageURL: TextMatcher("chat/42", mode: .contains),
         role: .textField,
-        label: SemanticTextMatcher("Search", mode: .prefix)
+        label: TextMatcher("Search", mode: .prefix)
     )
     check(
         resolvedID(scoped, in: scopedSnapshot) == "e1",
@@ -22,15 +22,15 @@ func runElementLocatorChecks() throws {
         locatorElement("bottom", role: .button, label: "Open", y: 500),
         locatorElement("top", role: .button, label: "Open", y: 100)
     ])
-    let ambiguous = SemanticElementLocator(
+    let ambiguous = ElementLocator(
         role: .button,
-        label: SemanticTextMatcher("Open")
+        label: TextMatcher("Open")
     )
     check(
         resolvedID(ambiguous, in: ordered) == nil
-            && resolvedID(SemanticElementLocator(
+            && resolvedID(ElementLocator(
                 role: .button,
-                label: SemanticTextMatcher("Open"),
+                label: TextMatcher("Open"),
                 ordinal: 1
             ), in: ordered) == "bottom",
         "ambiguous locators must require an explicit discriminator"
@@ -42,18 +42,18 @@ func runElementLocatorChecks() throws {
         locatorElement("other", role: .textField, label: "To")
     ])
     check(
-        resolvedID(SemanticElementLocator(
+        resolvedID(ElementLocator(
             role: .textField,
-            label: SemanticTextMatcher("To"),
+            label: TextMatcher("To"),
             ancestorRole: .scrollArea,
-            ancestorLabel: SemanticTextMatcher("Compose message")
+            ancestorLabel: TextMatcher("Compose message")
         ), in: hierarchy) == "recipient",
         "ancestor constraints must distinguish equivalent fields"
     )
 
-    let send = SemanticElementLocator(
+    let send = ElementLocator(
         role: .button,
-        label: SemanticTextMatcher("Send")
+        label: TextMatcher("Send")
     )
     let first = locatorSnapshot(elements: [
         locatorElement("e9", role: .button, label: "Send")
@@ -68,27 +68,27 @@ func runElementLocatorChecks() throws {
     )
 
     check(
-        resolvedID(SemanticElementLocator(
-            application: SemanticTextMatcher("Mail"),
+        resolvedID(ElementLocator(
+            application: TextMatcher("Mail"),
             role: .button
         ), in: first) == nil
-            && resolvedID(SemanticElementLocator(), in: first) == nil,
+            && resolvedID(ElementLocator(), in: first) == nil,
         "scope mismatches and empty locators must not resolve"
     )
 
-    let configured = SemanticElementLocator(
-        application: SemanticTextMatcher("Messages"),
+    let configured = ElementLocator(
+        application: TextMatcher("Messages"),
         role: .button,
-        label: SemanticTextMatcher("Send"),
+        label: TextMatcher("Send"),
         ordinal: 0
     )
     let roundTrip = try JSONDecoder().decode(
-        SemanticElementLocator.self,
+        ElementLocator.self,
         from: JSONEncoder().encode(configured)
     )
     check(roundTrip == configured, "locators must round-trip through tool JSON")
     let minimal = try JSONDecoder().decode(
-        SemanticElementLocator.self,
+        ElementLocator.self,
         from: Data(#"{"role":"button"}"#.utf8)
     )
     check(minimal.requiresEnabled == true, "locators must require enabled elements by default")
@@ -99,9 +99,9 @@ func runElementLocatorChecks() throws {
     ])
     check(
         resolvedID(send, in: enabled) == "enabled"
-            && resolvedID(SemanticElementLocator(
+            && resolvedID(ElementLocator(
                 role: .button,
-                label: SemanticTextMatcher("Send"),
+                label: TextMatcher("Send"),
                 requiresEnabled: false
             ), in: enabled) == nil,
         "disabled elements must be excluded unless explicitly allowed"
@@ -120,8 +120,8 @@ func runElementLocatorChecks() throws {
 }
 
 private func resolvedID(
-    _ locator: SemanticElementLocator,
-    in snapshot: SemanticSnapshot
+    _ locator: ElementLocator,
+    in snapshot: ScreenSemantics
 ) -> String? {
     guard let action = try? ScreenAction.click(.locator(locator))
         .resolvingSemanticTargets(in: snapshot),
@@ -129,8 +129,8 @@ private func resolvedID(
     return elementID
 }
 
-private func locatorSnapshot(elements: [SemanticElement]) -> SemanticSnapshot {
-    SemanticSnapshot(
+private func locatorSnapshot(elements: [ScreenElement]) -> ScreenSemantics {
+    ScreenSemantics(
         applicationName: "Messages",
         windowTitle: "Chat with Alice",
         pageURL: "https://example.test/chat/42",
@@ -141,17 +141,17 @@ private func locatorSnapshot(elements: [SemanticElement]) -> SemanticSnapshot {
 private func locatorElement(
     _ id: String,
     parentID: String? = nil,
-    role: SemanticElementRole,
+    role: ElementRole,
     label: String,
     y: Int = 0,
     isEnabled: Bool = true
-) -> SemanticElement {
-    SemanticElement(
+) -> ScreenElement {
+    ScreenElement(
         id: id,
         parentID: parentID,
         role: role,
         label: label,
-        frame: SemanticRect(x: 10, y: y, width: 100, height: 30),
+        frame: NormalizedRect(x: 10, y: y, width: 100, height: 30),
         isEnabled: isEnabled
     )
 }

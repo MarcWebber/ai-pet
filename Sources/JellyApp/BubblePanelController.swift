@@ -174,7 +174,7 @@ final class BubblePanelController: NSObject {
 
     func showTakeoverResult(
         _ message: String,
-        events: [TakeoverEvent] = [],
+        events: [ActivityEvent] = [],
         isError: Bool,
         preferences: AssistantPreferences?,
         showsActivityDetails: Bool,
@@ -201,22 +201,18 @@ final class BubblePanelController: NSObject {
     }
 
     func showTakeoverProgress(
-        _ snapshot: TakeoverSnapshot,
+        _ snapshot: SessionSnapshot,
         preferences: AssistantPreferences,
         showsActivityDetails: Bool,
         petFrame: NSRect,
         screen: NSScreen?
     ) {
-        let metrics = snapshot.metrics.map {
-            "操作 \($0.actionCount) · 观察 \($0.observationCount) · \(Int($0.durationSeconds)) 秒"
-        }
         show(
             title: "果冻 · \(snapshot.activity.label)",
             badge: preferences.compactLabel,
             body: timeline(
                 snapshot.events,
-                final: [snapshot.message, metrics]
-                    .compactMap { $0 }.joined(separator: "\n"),
+                final: snapshot.message ?? "",
                 showsActivityDetails: showsActivityDetails
             ),
             size: showsActivityDetails
@@ -585,7 +581,7 @@ final class BubblePanelController: NSObject {
     }
 
     private func timeline(
-        _ events: [TakeoverEvent],
+        _ events: [ActivityEvent],
         final: String?,
         showsActivityDetails: Bool
     ) -> String {

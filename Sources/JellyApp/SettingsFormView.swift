@@ -223,8 +223,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         typingSpeedField.delegate = self
         typingSpeedField.alignment = .right
         typingSpeedField.formatter = Self.typingSpeedFormatter()
-        typingSpeedStepper.minValue = Double(HumanTypingPlan.minimumSpeedPercent)
-        typingSpeedStepper.maxValue = Double(HumanTypingPlan.maximumSpeedPercent)
+        typingSpeedStepper.minValue = Double(TypingRhythm.minimumSpeedPercent)
+        typingSpeedStepper.maxValue = Double(TypingRhythm.maximumSpeedPercent)
         typingSpeedStepper.increment = 5
         configure(
             typingSpeedStepper,
@@ -709,7 +709,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     @objc private func typingSpeedStepperChanged() {
-        let value = HumanTypingPlan.normalizedSpeedPercent(
+        let value = TypingRhythm.normalizedSpeedPercent(
             typingSpeedStepper.integerValue
         )
         typingSpeedField.integerValue = value
@@ -767,7 +767,7 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
             historyStepper.integerValue = value
             publishAssistant(historyTurns: value)
         } else if field === typingSpeedField {
-            let value = HumanTypingPlan.normalizedSpeedPercent(
+            let value = TypingRhythm.normalizedSpeedPercent(
                 typingSpeedField.integerValue
             )
             typingSpeedField.integerValue = value
@@ -865,8 +865,8 @@ final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
         let formatter = NumberFormatter()
         formatter.numberStyle = .none
         formatter.allowsFloats = false
-        formatter.minimum = NSNumber(value: HumanTypingPlan.minimumSpeedPercent)
-        formatter.maximum = NSNumber(value: HumanTypingPlan.maximumSpeedPercent)
+        formatter.minimum = NSNumber(value: TypingRhythm.minimumSpeedPercent)
+        formatter.maximum = NSNumber(value: TypingRhythm.maximumSpeedPercent)
         return formatter
     }
 }

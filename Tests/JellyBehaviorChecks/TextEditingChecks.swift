@@ -1,9 +1,9 @@
 import JellyCore
 
-func runHumanTypingChecks() {
+func runTextEditingChecks() {
     let source = String(repeating: "int answer = value + 1; // update\n", count: 12)
-    let strokes = HumanTypingPlan.strokes(for: source, seed: 42)
-    let baseline = HumanTypingPlan.strokes(
+    let strokes = TypingRhythm.strokes(for: source, seed: 42)
+    let baseline = TypingRhythm.strokes(
         for: source,
         seed: 42,
         speedPercent: 100
@@ -31,7 +31,7 @@ func runHumanTypingChecks() {
         },
         "the default configured typing speed must be slightly slower than baseline"
     )
-    let faster = HumanTypingPlan.strokes(
+    let faster = TypingRhythm.strokes(
         for: source,
         seed: 42,
         speedPercent: 140
@@ -56,7 +56,7 @@ func runHumanTypingChecks() {
         "mistakes and backspaces must preserve the requested final text"
     )
 
-    let short = HumanTypingPlan.strokes(for: "return value;", seed: 7)
+    let short = TypingRhythm.strokes(for: "return value;", seed: 7)
     check(
         short.allSatisfy { $0.mistypedText == nil },
         "short form values should not be forced to contain a fake mistake"
@@ -80,11 +80,11 @@ func runHumanTypingChecks() {
             }
     };
     """
-    let edit = HumanTextEditPlan.make(
+    let edit = TextEditing.make(
         currentText: starter,
         desiredText: completed
     )
-    if case let .replaceRange(location, length, replacement) = edit {
+    if case let .replace(location, length, replacement) = edit {
         let old = Array(starter.utf16)
         let replayed = String(decoding: old[..<location], as: UTF16.self)
             + replacement
@@ -100,28 +100,28 @@ func runHumanTypingChecks() {
         check(false, "starter code should produce a minimal replacement range")
     }
     check(
-        HumanTextEditPlan.make(
+        TextEditing.make(
             currentText: completed,
             desiredText: completed
         ) == .unchanged,
         "identical editor content must not be typed again"
     )
     check(
-        HumanTextEditPlan.make(
+        TextEditing.make(
             currentText: nil,
             desiredText: completed
-        ) == .currentTextUnavailable,
+        ) == nil,
         "unknown editor content must stop instead of deleting starter code"
     )
     let nonBlankStarter = starter.replacingOccurrences(
         of: "\(blankBody)\n",
         with: "            return 0;\n"
     )
-    let damagedEdit = HumanTextEditPlan.make(
+    let damagedEdit = TextEditing.make(
         currentText: nonBlankStarter,
         desiredText: completed
     )
-    if case let .replaceRange(location, length, replacement)
+    if case let .replace(location, length, replacement)
         = damagedEdit {
         let old = Array(nonBlankStarter.utf16)
         let repaired = String(decoding: old[..<location], as: UTF16.self)
@@ -136,8 +136,8 @@ func runHumanTypingChecks() {
     }
     let unrelatedCurrent = "existing code"
     let unrelatedDesired = "different code"
-    if case let .replaceRange(location, length, replacement)
-        = HumanTextEditPlan.make(
+    if case let .replace(location, length, replacement)
+        = TextEditing.make(
             currentText: unrelatedCurrent,
             desiredText: unrelatedDesired
         ) {
@@ -153,15 +153,22 @@ func runHumanTypingChecks() {
         check(false, "unrelated damaged text should still produce a repair")
     }
     check(
-        HumanTextEditPlan.make(
+        TextEditing.make(
             currentText: "class Solution {\n    return ;\n}",
             desiredText: "class Solution {\n    return answer;\n}"
-        ) == .replaceRange(
+        ) == .replace(
             location: 28,
             length: 0,
             text: "answer"
         ),
         "a contiguous fragment deleted during typing must be resumed at the gap"
+    )
+    check(
+        TextEditing.make(
+            currentText: "a😀c",
+            desiredText: "a😃c"
+        ) == .replace(location: 1, length: 2, text: "😃"),
+        "minimal edits must use valid UTF-16 ranges without splitting emoji"
     )
     check(
         (try? ScreenAction.keyPress(key: .delete, modifiers: []).validate()) != nil

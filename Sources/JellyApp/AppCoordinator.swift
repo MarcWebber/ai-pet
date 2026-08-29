@@ -13,26 +13,22 @@ final class AppCoordinator {
         category: "session"
     )
     private let preferencesStore: AppPreferencesStore
-    private let screenBackend = ScreenCaptureCLIBackend()
+    private let screenBackend = FullDisplayBackend()
     private let hotkey = CarbonHotkeyService()
     private let pet = PetPanelController()
     private let bubble = BubblePanelController()
     private let settings = SettingsWindowController()
     private let status = StatusItemController()
-    private let temporaryArtifactSweeper = TemporaryArtifactSweeper()
     private let soundPlayer: SoundPlayer
     private let codexExecutableURL: URL?
-    private let takeover: TakeoverCoordinator
+    private let session: SessionController
 
     private var requestTask: Task<Void, Never>?
     private var settingsTask: Task<Void, Never>?
-    private var activeTakeoverRequest: TakeoverRequest?
     private var lastActivity: PetActivity = .idle
-    private var lastMessage: String?
     private var pendingAnswerQuestion: String?
     private var answerHistory: [AnswerHistoryEntry] = []
     private var answerHistoryIndex: Int?
-    private var isShowingAnswerHistory = false
 
     init() {
         let packagedConfiguration = Bundle.main.resourceURL?
@@ -57,21 +53,16 @@ final class AppCoordinator {
             withExtension: "md",
             subdirectory: "Skills/jellypet-takeover"
         )
-        let capture = ScreenCaptureService(backend: screenBackend)
-        let cleaner = CaptureArtifactCleaner()
-        let semanticProvider = BrowserAccessibilityContextProvider()
-        takeover = TakeoverCoordinator(
-            capture: capture,
-            responder: CodexProcessResponder(
+        let screen = ScreenDriver(
+            backend: screenBackend,
+            typingSpeedPercent: { preferences.typingSpeedPercent }
+        )
+        session = SessionController(
+            codex: CodexClient(
                 executableURL: codexExecutableURL,
                 skillURL: skillURL
             ),
-            cleaner: cleaner,
-            executor: CGEventScreenActionExecutor(
-                semanticProvider: semanticProvider,
-                typingSpeedPercent: { preferences.typingSpeedPercent }
-            ),
-            semanticProvider: semanticProvider
+            screen: screen
         )
         soundPlayer = SoundPlayer(
             resourceDirectory: Self.soundResourceDirectory()
@@ -80,7 +71,6 @@ final class AppCoordinator {
     }
 
     func start() {
-        temporaryArtifactSweeper.removeAll()
         wireActions()
         applyConfiguredSprite()
         pet.show(on: selectedNSScreen())
@@ -115,12 +105,10 @@ final class AppCoordinator {
     func stop() async {
         requestTask?.cancel()
         settingsTask?.cancel()
-        takeover.onSnapshot = nil
-        takeover.closeAnswer()
-        if takeover.snapshot.isActive {
-            takeover.cancel()
+        session.onSnapshot = nil
+        if session.snapshot.isActive {
+            session.cancel()
         }
-        temporaryArtifactSweeper.removeAll()
         hotkey.unregister()
         settings.hide()
         bubble.hide()
@@ -128,7 +116,7 @@ final class AppCoordinator {
     }
 
     private func wireActions() {
-        takeover.onSnapshot = { [weak self] snapshot in
+        session.onSnapshot = { [weak self] snapshot in
             self?.handleSession(snapshot)
         }
         pet.onClick = { [weak self] in
@@ -164,7 +152,7 @@ final class AppCoordinator {
             guard let self else { return }
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if !(await self.takeover.addInstruction(task)) {
+                if !(await self.session.addInstruction(task)) {
                     self.performPrimaryAction(task: task)
                 }
             }
@@ -229,7 +217,7 @@ final class AppCoordinator {
     }
 
     private func performPrimaryAction(task: String? = nil) {
-        if takeover.snapshot.isActive {
+        if session.snapshot.isActive {
             cancelTakeover()
         } else {
             requestTask?.cancel()
@@ -244,7 +232,7 @@ final class AppCoordinator {
                 let question = Self.normalizedAnswerQuestion(task)
                 pendingAnswerQuestion = question
                 pet.show(on: nsScreen(for: display.id))
-                await takeover.answer(
+                await session.answer(
                     displayID: display.id,
                     preferences: preferencesStore.assistantPreferences,
                     question: question
@@ -253,7 +241,7 @@ final class AppCoordinator {
             }
             pendingAnswerQuestion = nil
             setActivity(.observing)
-            isShowingAnswerHistory = false
+            answerHistoryIndex = nil
             bubble.hide()
             NSApp.deactivate()
             try await Task.sleep(nanoseconds: 120_000_000)
@@ -266,14 +254,11 @@ final class AppCoordinator {
                 screen: pet.panel.screen
             )
             let request = takeoverRequest(displayID: display.id, task: task)
-            activeTakeoverRequest = request
-            lastMessage = nil
             settingsTask?.cancel()
-            takeover.closeAnswer()
             settings.hide()
             pet.setClickThrough(true)
             pet.show(on: nsScreen(for: request.displayID))
-            await takeover.start(
+            await session.start(
                 request,
                 initialMessage: "已绑定当前前台窗口；本轮只使用 Accessibility 和全屏观察。"
             )
@@ -300,33 +285,28 @@ final class AppCoordinator {
     }
 
     private func cancelTakeover(message: String = "已由你停止") {
-        let wasActive = takeover.snapshot.isActive
         requestTask?.cancel()
         pet.setClickThrough(false)
-        if wasActive {
-            takeover.cancel(message: message)
+        if session.snapshot.isTakingOver {
+            session.cancel(message: message)
         } else {
-            activeTakeoverRequest = nil
             updateMenu()
         }
     }
 
-    private func handleSession(_ snapshot: TakeoverSnapshot) {
+    private func handleSession(_ snapshot: SessionSnapshot) {
         sessionLog.notice(
-            "phase=\(String(describing: snapshot.phase), privacy: .public) actions=\(snapshot.metrics?.actionCount ?? 0) observations=\(snapshot.metrics?.observationCount ?? 0)"
+            "mode=\(snapshot.mode.rawValue, privacy: .public) phase=\(String(describing: snapshot.phase), privacy: .public) events=\(snapshot.events.count)"
         )
-        guard snapshot.phase != .idle else {
+        switch snapshot.mode {
+        case .idle:
             updateMenu()
-            return
-        }
-        guard let request = activeTakeoverRequest else {
+        case .answering, .presentingAnswer:
             handleAnswer(snapshot)
-            return
-        }
-
-        setActivity(snapshot.activity)
-        pet.setClickThrough(snapshot.isActive)
-        if snapshot.isActive {
+        case .takingOver:
+            guard let request = snapshot.request else { return }
+            setActivity(snapshot.activity)
+            pet.setClickThrough(true)
             pet.show(on: nsScreen(for: request.displayID))
             bubble.showTakeoverProgress(
                 snapshot,
@@ -335,54 +315,32 @@ final class AppCoordinator {
                 petFrame: pet.panel.frame,
                 screen: pet.panel.screen
             )
-        }
-
-        switch snapshot.phase {
-        case .idle:
-            break
-
-        case .executing, .locating, .verifying:
             updateMenu()
-
-        case .capturing, .deciding:
-            updateMenu()
-
-        case .finished:
+        case .presentingTakeover:
+            guard let request = snapshot.request else { return }
+            let failure = snapshot.failure
             finishTakeover(
-                message: snapshot.message ?? "任务已完成。",
-                activity: .success,
-                request: request
-            )
-
-        case .error:
-            let failure = snapshot.failure ?? .invalidCodexOutput
-            finishTakeover(
-                message: snapshot.message ?? failure.localizedDescription,
-                activity: .failure,
+                message: snapshot.message ?? failure?.localizedDescription
+                    ?? "任务已完成。",
+                activity: snapshot.phase == .finished ? .success
+                    : snapshot.phase == .cancelled ? .idle : .failure,
                 failure: failure,
-                request: request
-            )
-
-        case .cancelled:
-            finishTakeover(
-                message: snapshot.message ?? "已由你停止",
-                activity: .idle,
                 request: request
             )
         }
     }
 
-    private func handleAnswer(_ snapshot: TakeoverSnapshot) {
+    private func handleAnswer(_ snapshot: SessionSnapshot) {
         let preferences = preferencesStore.assistantPreferences
         setActivity(snapshot.activity)
         switch snapshot.phase {
         case .capturing:
-            isShowingAnswerHistory = false
+            answerHistoryIndex = nil
             bubble.hide()
         case .deciding:
-            isShowingAnswerHistory = false
+            answerHistoryIndex = nil
             bubble.showWorking(
-                previousMessage: snapshot.message ?? lastMessage,
+                previousMessage: snapshot.message,
                 preferences: preferences,
                 takeoverEnabled: false,
                 petFrame: pet.panel.frame,
@@ -421,7 +379,6 @@ final class AppCoordinator {
         let latestIndex = answerHistory.count - 1
         answerHistoryIndex = latestIndex
         pendingAnswerQuestion = nil
-        lastMessage = message
         showAnswerHistoryEntry(
             at: latestIndex,
             preferences: preferences
@@ -437,13 +394,13 @@ final class AppCoordinator {
     }
 
     private func showAnswerHistory(offset: Int) {
-        guard !takeover.snapshot.isActive,
+        guard !session.snapshot.isActive,
               let lastIndex = answerHistory.indices.last
         else {
             return
         }
         let target: Int
-        if isShowingAnswerHistory, let current = answerHistoryIndex {
+        if let current = answerHistoryIndex {
             target = min(max(current + offset, 0), lastIndex)
         } else {
             target = lastIndex
@@ -461,8 +418,6 @@ final class AppCoordinator {
     ) {
         guard answerHistory.indices.contains(index) else { return }
         let entry = answerHistory[index]
-        isShowingAnswerHistory = true
-        lastMessage = entry.answer
         if !pet.panel.isVisible {
             pet.show(on: selectedNSScreen())
             updateMenu()
@@ -481,19 +436,19 @@ final class AppCoordinator {
         guard let question = Self.normalizedAnswerQuestion(question) else {
             return
         }
-        guard takeover.canFollowUp else {
+        guard session.canFollowUp else {
             performPrimaryAction(task: question)
             return
         }
         pendingAnswerQuestion = question
         requestTask?.cancel()
         requestTask = Task { [weak self] in
-            await self?.takeover.followUp(question)
+            await self?.session.followUp(question)
         }
     }
 
     private func showComposer(initialText: String = "") {
-        isShowingAnswerHistory = false
+        answerHistoryIndex = nil
         if !pet.panel.isVisible {
             pet.show(on: selectedNSScreen())
             updateMenu()
@@ -517,10 +472,8 @@ final class AppCoordinator {
         _ takeoverEnabled: Bool,
         preserving text: String
     ) {
-        if takeover.snapshot.isActive {
-            guard !takeoverEnabled, activeTakeoverRequest != nil else {
-                return
-            }
+        if session.snapshot.isTakingOver {
+            guard !takeoverEnabled else { return }
             preferencesStore.takeoverEnabled = false
             updateMenu()
             cancelTakeover(message: "已关闭接管")
@@ -533,30 +486,24 @@ final class AppCoordinator {
     }
 
     private func closeBubble() {
-        if takeover.snapshot.isActive {
+        if session.snapshot.isTakingOver {
             cancelTakeover()
             return
         }
         requestTask?.cancel()
-        takeover.closeAnswer()
+        session.closeAnswer()
         pendingAnswerQuestion = nil
-        lastMessage = nil
-        isShowingAnswerHistory = false
+        answerHistoryIndex = nil
         bubble.hide()
     }
 
     private func togglePet() {
-        guard !takeover.snapshot.isActive
-            || activeTakeoverRequest == nil
-        else {
-            return
-        }
+        guard !session.snapshot.isActive else { return }
         if pet.panel.isVisible {
             requestTask?.cancel()
-            takeover.closeAnswer()
+            session.closeAnswer()
             pendingAnswerQuestion = nil
-            lastMessage = nil
-            isShowingAnswerHistory = false
+            answerHistoryIndex = nil
             bubble.hide()
             pet.hide()
         } else {
@@ -590,10 +537,9 @@ final class AppCoordinator {
         request: TakeoverRequest
     ) {
         requestTask = nil
-        activeTakeoverRequest = nil
         pet.setClickThrough(false)
         setActivity(activity)
-        isShowingAnswerHistory = false
+        answerHistoryIndex = nil
 
         if failure != nil {
             pet.show(
@@ -601,7 +547,7 @@ final class AppCoordinator {
             )
             bubble.showTakeoverResult(
                 message,
-                events: takeover.snapshot.events,
+                events: session.snapshot.events,
                 isError: true,
                 preferences: request.assistantPreferences,
                 showsActivityDetails: preferencesStore.showActivityDetails,
@@ -617,7 +563,7 @@ final class AppCoordinator {
         )
         bubble.showTakeoverResult(
             message,
-            events: takeover.snapshot.events,
+            events: session.snapshot.events,
             isError: activity == .failure,
             preferences: request.assistantPreferences,
             showsActivityDetails: preferencesStore.showActivityDetails,
@@ -661,7 +607,7 @@ final class AppCoordinator {
         preferences: AssistantPreferences? = nil
     ) {
         setActivity(.failure)
-        isShowingAnswerHistory = false
+        answerHistoryIndex = nil
         pet.show(on: selectedNSScreen())
 
         bubble.showError(
@@ -765,7 +711,7 @@ final class AppCoordinator {
                     preferencesStore.answerScrollShortcut,
                 answerHistoryShortcut:
                     preferencesStore.answerHistoryShortcut,
-                modelOptions: CodexProcessResponder.suggestedModels,
+                modelOptions: CodexClient.suggestedModels,
                 codexStatusText: codexStatusText,
                 configurationURL: preferencesStore.configurationURL,
                 configurationError: configurationError,
@@ -778,9 +724,8 @@ final class AppCoordinator {
     }
 
     private func updateMenu() {
-        let snapshot = takeover.snapshot
-        let isTakingOver = snapshot.isActive
-            && activeTakeoverRequest != nil
+        let snapshot = session.snapshot
+        let isTakingOver = snapshot.isTakingOver
         status.update(
             isPetVisible: pet.panel.isVisible,
             isMuted: soundPlayer.isMuted,

@@ -1,30 +1,20 @@
 import Foundation
 
-public struct CaptureArtifact: Equatable, Sendable {
-    public let imageURL: URL
-    public let sessionDirectoryURL: URL
-
-    public init(imageURL: URL, sessionDirectoryURL: URL) {
-        self.imageURL = imageURL
-        self.sessionDirectoryURL = sessionDirectoryURL
-    }
-}
-
 public struct CodexRequest: Equatable, Sendable {
-    public let imageURL: URL?
+    public let imagePNG: Data?
     public let prompt: String
     public let model: String
     public let reasoningEffort: ReasoningEffort
     public let conversationHistoryTurns: Int
 
     public init(
-        imageURL: URL?,
+        imagePNG: Data?,
         prompt: String,
         model: String,
         reasoningEffort: ReasoningEffort,
         conversationHistoryTurns: Int = 8
     ) {
-        self.imageURL = imageURL
+        self.imagePNG = imagePNG
         self.prompt = prompt
         self.model = model
         self.reasoningEffort = reasoningEffort
@@ -38,26 +28,42 @@ public struct CodexRequest: Equatable, Sendable {
     }
 }
 
+public struct ScreenObservation: Equatable, Sendable {
+    public let displayID: UInt32
+    public let semantics: ScreenSemantics?
+    public let screenshotPNG: Data?
+
+    public init(
+        displayID: UInt32,
+        semantics: ScreenSemantics?,
+        screenshotPNG: Data?
+    ) {
+        self.displayID = displayID
+        self.semantics = semantics
+        self.screenshotPNG = screenshotPNG
+    }
+}
+
 public enum ScreenToolCall: Equatable, Sendable {
     case observe
     case perform(ScreenAction)
     case activateAndVerify(ActivateAndVerifyRequest)
 }
 
-public enum SemanticConditionState: String, Codable, CaseIterable, Equatable, Sendable {
+public enum ConditionState: String, Codable, CaseIterable, Equatable, Sendable {
     case present, absent
 }
 
 public struct ActivateAndVerifyRequest: Codable, Equatable, Sendable {
-    public let targetLocator: SemanticElementLocator
-    public let expectedLocator: SemanticElementLocator
-    public let expectedState: SemanticConditionState
+    public let targetLocator: ElementLocator
+    public let expectedLocator: ElementLocator
+    public let expectedState: ConditionState
     public let expectedValueEquals: String?
 
     public init(
-        targetLocator: SemanticElementLocator,
-        expectedLocator: SemanticElementLocator,
-        expectedState: SemanticConditionState = .present,
+        targetLocator: ElementLocator,
+        expectedLocator: ElementLocator,
+        expectedState: ConditionState = .present,
         expectedValueEquals: String? = nil
     ) {
         self.targetLocator = targetLocator
@@ -72,11 +78,7 @@ public struct ScreenToolResult: Equatable, Sendable {
     public let message: String
     public let screenshotPNG: Data?
 
-    public init(
-        success: Bool,
-        message: String,
-        screenshotPNG: Data? = nil
-    ) {
+    public init(success: Bool, message: String, screenshotPNG: Data? = nil) {
         self.success = success
         self.message = message
         self.screenshotPNG = screenshotPNG
@@ -87,13 +89,7 @@ public typealias ScreenToolHandler = @MainActor @Sendable (
     ScreenToolCall
 ) async -> ScreenToolResult
 
-@MainActor
-public protocol CaptureService: AnyObject {
-    var prefersSemanticObservation: Bool { get }
-    func capture(displayID: UInt32) async throws -> CaptureArtifact
-}
-
-public protocol AIResponder: AnyObject {
+public protocol CodexServing: AnyObject {
     func respond(
         to request: CodexRequest,
         onTextDelta: @escaping @Sendable (String) -> Void,
@@ -105,24 +101,17 @@ public protocol AIResponder: AnyObject {
     func cancel()
 }
 
-public protocol CaptureCleaning: AnyObject {
-    func remove(_ artifact: CaptureArtifact)
-}
-
 @MainActor
-public protocol ScreenActionExecuting: AnyObject {
+public protocol ScreenDriving: AnyObject {
+    func observe(displayID: UInt32) async throws -> ScreenObservation
     func execute(
         _ action: ScreenAction,
-        snapshot: SemanticSnapshot?,
+        observation: ScreenObservation,
         displayID: UInt32
     ) async throws
     func cancel()
 }
 
 public enum SoundCue: String, CaseIterable, Sendable {
-    case capture
-    case thinking
-    case answer
-    case error
-    case dock
+    case capture, thinking, answer, error, dock
 }
