@@ -18,12 +18,8 @@ func runTextEditingChecks() {
         "long code should occasionally include a corrected typing mistake"
     )
     check(
-        strokes.allSatisfy {
-            (56...450).contains($0.delayAfterMilliseconds)
-                && (106...225).contains($0.mistakeDelayMilliseconds)
-                && (75...169).contains($0.correctionDelayMilliseconds)
-        },
-        "typing and correction delays must stay inside the natural preset"
+        strokes.allSatisfy { (56...450).contains($0.delayAfterMilliseconds) },
+        "typing delays must stay inside the natural preset"
     )
     check(
         zip(strokes, baseline).allSatisfy {
@@ -105,13 +101,6 @@ func runTextEditingChecks() {
             desiredText: completed
         ) == .unchanged,
         "identical editor content must not be typed again"
-    )
-    check(
-        TextEditing.make(
-            currentText: nil,
-            desiredText: completed
-        ) == nil,
-        "unknown editor content must stop instead of deleting starter code"
     )
     let nonBlankStarter = starter.replacingOccurrences(
         of: "\(blankBody)\n",

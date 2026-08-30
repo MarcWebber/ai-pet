@@ -2,311 +2,212 @@ import Foundation
 
 @MainActor
 public final class SessionController {
-    private struct AnswerSession {
-        let id: UUID
-        let displayID: UInt32
-        let question: String?
-        let preferences: AssistantPreferences
-        var phase: SessionPhase
-        var message: String?
-    }
-
-    private struct TakeoverSession {
-        let id: UUID
-        let request: TakeoverRequest
-        var phase: SessionPhase
-        var message: String?
-        var observation: ScreenObservation?
-        var events: [ActivityEvent] = []
-        var sequence = 0
-    }
-
-    private struct PresentedResult {
-        enum Source { case answer(AssistantPreferences), takeover(TakeoverRequest) }
-        let source: Source
-        let phase: SessionPhase
-        let message: String
-        let failure: PetFailure?
-        let events: [ActivityEvent]
-    }
-
-    private enum AppSession {
-        case idle
-        case answering(AnswerSession)
-        case takeover(TakeoverSession)
-        case presenting(PresentedResult)
-    }
-
-    public private(set) var snapshot = SessionSnapshot(
-        mode: .idle,
-        phase: .idle
-    )
+    public private(set) var snapshot = SessionSnapshot(mode: .idle, activity: .idle)
     public var onSnapshot: ((SessionSnapshot) -> Void)?
     public var canFollowUp: Bool { answerPreferences != nil }
-
     private let codex: CodexServing
     private let screen: ScreenDriving
-    private var state: AppSession = .idle
-
+    private var currentID: UUID?
+    private var answerPreferences: AssistantPreferences?
+    private var observation: ScreenObservation?
+    private var sequence = 0
     public init(codex: CodexServing, screen: ScreenDriving) {
         self.codex = codex
         self.screen = screen
     }
-
-    public func start(
-        _ request: TakeoverRequest,
-        initialMessage: String? = nil
-    ) async {
-        cancelWork()
-        let id = UUID()
-        state = .takeover(TakeoverSession(
-            id: id,
-            request: request,
-            phase: .deciding,
-            message: initialMessage ?? "正在初始化 Codex 和屏幕工具"
-        ))
-        appendEvent(.observing, initialMessage)
-        publish()
-        await codex.resetSession()
+    public func start(_ request: TakeoverRequest, initialMessage: String? = nil) async {
+        let id = begin(
+            mode: .takingOver, activity: .thinking,
+            message: initialMessage ?? "正在初始化 Codex 和屏幕工具",
+            request: request
+        )
+        sequence = 0
+        appendEvent(.observing, initialMessage, id: id)
+        await codex.prepare(resetHistory: true)
         guard isCurrent(id) else { return }
 
-        let task = Self.bounded(request.task)
+        let task = AppMetadata.boundedUserText(request.task) ?? "处理当前界面上的任务"
         let custom = request.assistantPreferences.customInstructions
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = [
-            "用户任务：\(task ?? "处理当前界面上的任务")",
-            custom.isEmpty ? nil : "用户补充要求：\(custom)"
-        ].compactMap { $0 }.joined(separator: "\n")
-
+        let prompt = custom.isEmpty
+            ? "用户任务：\(task)"
+            : "用户任务：\(task)\n用户补充要求：\(custom)"
         do {
-            var answer = try await modelResponse(
-                prompt: prompt,
-                preferences: request.assistantPreferences,
-                id: id,
-                tools: true
+            var answer = try await respond(
+                prompt, preferences: request.assistantPreferences, id: id, tools: true
             )
             try ensureCurrent(id)
-            if takeoverNeedsFinalObservation(id) {
-                updateTakeover(id) {
-                    $0.phase = .verifying
-                    $0.message = "最后一步后正在确认真实界面"
-                }
-                answer = try await modelResponse(
-                    prompt: "最后一次改变界面的动作之后还没有成功 observe。请现在重新观察实际界面；如果任务未完成就继续修复，只有确认真实结果后再结束。",
+            if observation == nil {
+                update(.verifying, "最后一步后正在确认真实界面", id: id)
+                answer = try await respond(
+                    "最后一次改变界面的动作之后还没有成功 observe。请重新观察实际界面；未完成就继续修复，只有确认真实结果后再结束。",
                     preferences: request.assistantPreferences,
                     id: id,
                     tools: true
                 )
                 try ensureCurrent(id)
             }
-            guard !takeoverNeedsFinalObservation(id) else {
+            guard observation != nil else {
                 throw PetFailure.codexFailed("最后动作后没有重新观察，结果尚未确认。")
             }
-            presentTakeover(id: id, message: answer)
+            presentTakeover(answer, id: id)
         } catch is CancellationError {
-            guard isCurrent(id) else { return }
-            presentTakeover(id: id, message: "接管已停止", phase: .cancelled)
+            if isCurrent(id) { presentTakeover("接管已停止", id: id, activity: .idle) }
         } catch {
             guard isCurrent(id) else { return }
-            let failure = error as? PetFailure
-                ?? .codexFailed(error.localizedDescription)
-            presentTakeover(
-                id: id,
-                message: failure.localizedDescription,
-                phase: .error,
-                failure: failure
-            )
+            let failure = error as? PetFailure ?? .codexFailed(error.localizedDescription)
+            presentTakeover(failure.localizedDescription, id: id, activity: .failure)
         }
     }
-
     public func answer(
         displayID: UInt32,
         preferences: AssistantPreferences,
         question: String? = nil
     ) async {
-        cancelWork()
-        let id = UUID()
-        let question = Self.bounded(question)
-        state = .answering(AnswerSession(
-            id: id,
-            displayID: displayID,
-            question: question,
-            preferences: preferences,
-            phase: .capturing,
-            message: "正在截取所选整块显示器"
-        ))
-        publish()
-        await codex.prepareForNextTurn()
+        let id = begin(
+            mode: .answering, activity: .observing,
+            message: "正在截取所选整块显示器", preferences: preferences
+        )
+        await codex.prepare(resetHistory: false)
         guard isCurrent(id) else { return }
         do {
-            let observation = try await screen.observe(displayID: displayID)
+            let image = try await screen.observe(displayID: displayID).screenshotPNG
             try ensureCurrent(id)
-            updateAnswer(id, phase: .deciding, message: "正在等待 Codex 回答")
-            await completeAnswer(
-                id: id,
+            update(.thinking, "正在等待 Codex 回答", id: id)
+            try await completeAnswer(
+                ResponsePrompts.screenAnalysis(
+                    question: AppMetadata.boundedUserText(question),
+                    customInstructions: preferences.customInstructions
+                ),
+                imagePNG: image,
                 preferences: preferences,
-                prompt: ResponsePrompts.screenAnalysis(
+                id: id
+            )
+        } catch { finishAnswer(error, preferences: preferences, id: id) }
+    }
+    public func followUp(_ question: String) async {
+        guard let preferences = answerPreferences,
+              let question = AppMetadata.boundedUserText(question) else { return }
+        let id = begin(
+            mode: .answering, activity: .thinking,
+            message: "正在继续当前对话", preferences: preferences
+        )
+        do {
+            try await completeAnswer(
+                ResponsePrompts.followUp(
                     question: question,
                     customInstructions: preferences.customInstructions
                 ),
-                imagePNG: observation.screenshotPNG
-            )
-        } catch {
-            finishAnswer(error, id: id, preferences: preferences)
-        }
-    }
-
-    public func followUp(_ question: String) async {
-        guard let preferences = answerPreferences,
-              let question = Self.bounded(question) else { return }
-        cancelWork()
-        let id = UUID()
-        state = .answering(AnswerSession(
-            id: id,
-            displayID: 0,
-            question: question,
-            preferences: preferences,
-            phase: .deciding,
-            message: "正在继续当前对话"
-        ))
-        publish()
-        await completeAnswer(
-            id: id,
-            preferences: preferences,
-            prompt: ResponsePrompts.followUp(
-                question: question,
-                customInstructions: preferences.customInstructions
-            )
-        )
-    }
-
-    private func completeAnswer(
-        id: UUID,
-        preferences: AssistantPreferences,
-        prompt: String,
-        imagePNG: Data? = nil
-    ) async {
-        do {
-            let answer = try await modelResponse(
-                prompt: prompt,
                 preferences: preferences,
-                id: id,
-                imagePNG: imagePNG
+                id: id
             )
-            try ensureCurrent(id)
-            presentAnswer(preferences: preferences, message: answer)
-        } catch {
-            finishAnswer(error, id: id, preferences: preferences)
-        }
+        } catch { finishAnswer(error, preferences: preferences, id: id) }
     }
-
-    private func finishAnswer(
-        _ error: Error,
-        id: UUID,
-        preferences: AssistantPreferences
-    ) {
-        guard isCurrent(id) else { return }
-        if error is CancellationError {
-            state = .idle
-            publish()
-            return
-        }
-        let failure = error as? PetFailure
-            ?? .codexFailed(error.localizedDescription)
-        presentAnswer(
-            preferences: preferences,
-            message: failure.localizedDescription,
-            phase: .error,
-            failure: failure
-        )
-    }
-
     public func closeAnswer() {
         cancelWork()
-        state = .idle
-        publish()
+        currentID = nil
+        answerPreferences = nil
+        observation = nil
+        publish(.init(mode: .idle, activity: .idle))
     }
-
     public func cancel(message: String = "已由你停止") {
-        let request = takeoverRequest
-        let events = takeoverEvents
+        let request = snapshot.request
+        let events = snapshot.events
         cancelWork()
-        if let request {
-            state = .presenting(PresentedResult(
-                source: .takeover(request),
-                phase: .cancelled,
+        currentID = nil
+        answerPreferences = nil
+        observation = nil
+        publish(request.map {
+            SessionSnapshot(
+                mode: .takingOver,
+                activity: .idle,
                 message: message,
-                failure: nil,
-                events: events
-            ))
-        } else {
-            state = .idle
-        }
-        publish()
+                events: events,
+                request: $0
+            )
+        } ?? .init(mode: .idle, activity: .idle))
     }
-
     @discardableResult
     public func addInstruction(_ value: String) async -> Bool {
-        guard case let .takeover(session) = state,
-              let instruction = Self.bounded(value) else { return false }
+        guard snapshot.isTakingOver,
+              let id = currentID,
+              let instruction = AppMetadata.boundedUserText(value) else { return false }
         do {
             try await codex.steer("用户补充要求：\(instruction)")
             appendEvent(
                 .thinking,
                 "已把补充要求发送给 Codex",
-                kind: .userInstruction,
                 details: instruction,
-                id: session.id
+                id: id
             )
-            updateTakeover(session.id) { $0.message = "已收到补充要求" }
+            update(snapshot.activity, "已收到补充要求", id: id)
         } catch {
             appendEvent(
                 .failure,
                 "补充要求发送失败",
-                kind: .outcome,
                 details: error.localizedDescription,
-                id: session.id
+                id: id
             )
         }
         return true
     }
-
-    private func handle(_ call: ScreenToolCall, id: UUID) async -> ScreenToolResult {
-        guard isCurrent(id) else {
-            return .init(success: false, message: "JellyPet 会话已经结束。")
+    private func completeAnswer(
+        _ prompt: String,
+        imagePNG: Data? = nil,
+        preferences: AssistantPreferences,
+        id: UUID
+    ) async throws {
+        let answer = try await respond(
+            prompt, preferences: preferences, id: id, imagePNG: imagePNG
+        )
+        try ensureCurrent(id)
+        currentID = nil
+        observation = nil
+        publish(.init(mode: .answering, activity: .success, message: answer))
+    }
+    private func finishAnswer(
+        _ error: Error,
+        preferences: AssistantPreferences,
+        id: UUID
+    ) {
+        guard isCurrent(id) else { return }
+        currentID = nil
+        observation = nil
+        if error is CancellationError {
+            answerPreferences = nil
+            publish(.init(mode: .idle, activity: .idle))
+            return
         }
-        let sequence = nextSequence(id)
+        answerPreferences = preferences
+        let failure = error as? PetFailure ?? .codexFailed(error.localizedDescription)
+        publish(.init(
+            mode: .answering,
+            activity: .failure,
+            message: failure.localizedDescription
+        ))
+    }
+    private func handle(_ call: ScreenToolCall, id: UUID) async -> ScreenToolResult {
+        guard isCurrent(id) else { return .init(success: false, message: "会话已经结束。") }
+        sequence += 1
         switch call {
-        case .observe:
-            return await observe(id: id, sequence: sequence)
-        case let .perform(action):
-            return await perform(action, id: id, sequence: sequence)
-        case let .activateAndVerify(request):
-            return await activateAndVerify(request, id: id, sequence: sequence)
+        case .observe: return await observe(id: id, sequence: sequence)
+        case let .perform(action): return await perform(action, id: id, sequence: sequence)
         }
     }
-
     private func observe(id: UUID, sequence: Int) async -> ScreenToolResult {
-        guard let request = takeoverRequest(id) else {
+        guard let request = request(id) else {
             return .init(success: false, message: "接管会话已经结束。")
         }
-        updateTakeover(id) {
-            $0.phase = .capturing
-            $0.message = "Codex 正在观察当前界面"
-        }
+        update(.observing, "Codex 正在观察当前界面", id: id)
         do {
-            let observation = try await screen.observe(displayID: request.displayID)
+            let current = try await screen.observe(displayID: request.displayID)
             try ensureCurrent(id)
-            updateTakeover(id) {
-                $0.observation = observation
-                $0.phase = .deciding
-                $0.message = "观察结果已返回 Codex"
-            }
-            let details = render(observation.semantics)
+            observation = current
+            update(.thinking, "观察结果已返回 Codex", id: id)
+            let details = render(current.semantics)
             appendEvent(
                 .observing,
                 "已刷新当前界面",
-                kind: .observation,
                 details: details,
                 sequence: sequence,
                 id: id
@@ -314,161 +215,81 @@ public final class SessionController {
             return .init(
                 success: true,
                 message: "当前界面：\n\(details)\n截图是本次 observe 的指定显示器全屏图。元素 ID 仅在本次观察有效。",
-                screenshotPNG: observation.screenshotPNG
+                screenshotPNG: current.screenshotPNG
             )
         } catch is CancellationError {
             return .init(success: false, message: "观察已取消。")
         } catch {
+            observation = nil
             let message = failureMessage(error)
+            update(.thinking, "观察失败，等待 Codex 重试", id: id)
             appendEvent(
                 .failure,
                 "观察失败",
-                kind: .outcome,
                 details: message,
                 sequence: sequence,
                 id: id
             )
-            updateTakeover(id) {
-                $0.observation = nil
-                $0.phase = .deciding
-                $0.message = "观察失败，等待 Codex 重试"
-            }
             return .init(success: false, message: message)
         }
     }
-
     private func perform(
         _ action: ScreenAction,
         id: UUID,
         sequence: Int
     ) async -> ScreenToolResult {
-        guard let request = takeoverRequest(id),
-              let observation = takeoverObservation(id) else {
-            return .init(
-                success: false,
-                message: "请先调用 observe 获取当前界面；旧观察不能用于新动作。"
-            )
-        }
-        guard !action.needsVisualObservation
-                || observation.screenshotPNG != nil else {
-            return .init(success: false, message: "本次观察没有截图，不能使用视觉坐标。")
+        guard let request = request(id), let current = observation else {
+            return .init(success: false, message: "请先调用 observe；旧观察不能用于新动作。")
         }
         do {
             try action.validate()
-            let executable = try action.resolvingSemanticTargets(
-                in: observation.semantics
-            )
-            updateTakeover(id) {
-                $0.phase = .executing
-                $0.message = "正在执行 \(action.label)"
-            }
+            update(.locating, "正在定位动作目标", id: id)
+            let executable = try action.resolvingSemanticTargets(in: current.semantics)
+            update(.acting, "正在执行 \(action.label)", id: id)
             appendEvent(
                 .acting,
                 "调用 \(action.label)",
-                kind: .action,
-                details: actionDescription(action),
+                details: action.label,
                 sequence: sequence,
                 id: id
             )
             try await screen.execute(
                 executable,
-                observation: observation,
+                observation: current,
                 displayID: request.displayID
             )
             try ensureCurrent(id)
-            updateTakeover(id) {
-                $0.observation = nil
-                $0.phase = .verifying
-                $0.message = "动作完成，等待重新观察"
-            }
-            return .init(
-                success: true,
-                message: "\(action.label) 已执行。请调用 observe 读取真实结果。"
-            )
+            observation = nil
+            update(.verifying, "动作完成，等待重新观察", id: id)
+            return .init(success: true, message: "\(action.label) 已执行。请调用 observe 读取真实结果。")
         } catch is CancellationError {
             return .init(success: false, message: "操作已取消。")
         } catch {
+            observation = nil
             let message = failureMessage(error)
-            updateTakeover(id) {
-                $0.observation = nil
-                $0.phase = .verifying
-                $0.message = "动作结果不确定，等待重新观察"
-            }
+            update(.verifying, "动作结果不确定，等待重新观察", id: id)
             appendEvent(
                 .failure,
                 "\(action.label) 执行失败",
-                kind: .outcome,
                 details: message,
                 sequence: sequence,
                 id: id
             )
-            return .init(
-                success: false,
-                message: "\(message) 请重新 observe 后继续。"
-            )
+            return .init(success: false, message: "\(message) 请重新 observe 后继续。")
         }
     }
-
-    private func activateAndVerify(
-        _ request: ActivateAndVerifyRequest,
-        id: UUID,
-        sequence: Int
-    ) async -> ScreenToolResult {
-        let before = await observe(id: id, sequence: sequence)
-        guard before.success, let observation = takeoverObservation(id) else {
-            return .init(success: false, message: "无法获取激活前界面，未执行点击。")
-        }
-        guard let semantic = observation.semantics,
-              request.targetLocator.resolve(in: semantic).status == .matched else {
-            return .init(success: false, message: "当前界面无法唯一定位激活目标。")
-        }
-        let action = await perform(
-            .click(.locator(request.targetLocator)),
-            id: id,
-            sequence: sequence
-        )
-        guard action.success else { return action }
-        let after = await observe(id: id, sequence: sequence)
-        guard after.success, let current = takeoverObservation(id) else {
-            return .init(success: false, message: "已激活一次，但无法观察结果。")
-        }
-        guard postconditionSatisfied(request, in: current) else {
-            return .init(success: false, message: "已激活一次，但后置条件尚未满足。")
-        }
-        return .init(success: true, message: "目标已激活一次，并已验证后置条件。")
-    }
-
-    private func postconditionSatisfied(
-        _ request: ActivateAndVerifyRequest,
-        in observation: ScreenObservation
-    ) -> Bool {
-        guard let semantic = observation.semantics else { return false }
-        let resolution = request.expectedLocator.resolve(in: semantic)
-        if request.expectedState == .absent {
-            return resolution.status == .notFound
-        }
-        guard resolution.status == .matched,
-              let element = resolution.selected else { return false }
-        return request.expectedValueEquals.map { element.value == $0 } ?? true
-    }
-
-    private func modelResponse(
-        prompt: String,
+    private func respond(
+        _ prompt: String,
         preferences: AssistantPreferences,
         id: UUID,
         imagePNG: Data? = nil,
         tools: Bool = false
     ) async throws -> String {
-        streamedText = ""
-        defer { streamedText = "" }
         let handler: ScreenToolHandler?
         if tools {
             handler = { [weak self] call in
                 guard let self else {
-                    return .init(
-                        success: false,
-                        message: "JellyPet 会话已经结束。"
-                    )
+                    return .init(success: false, message: "会话已经结束。")
                 }
                 return await self.handle(call, id: id)
             }
@@ -476,272 +297,105 @@ public final class SessionController {
             handler = nil
         }
         return try await codex.respond(
-            to: CodexRequest(
+            to: .init(
                 imagePNG: imagePNG,
                 prompt: prompt,
-                model: preferences.model,
-                reasoningEffort: preferences.reasoningEffort,
-                conversationHistoryTurns: preferences.conversationHistoryTurns
+                preferences: preferences
             ),
-            onTextDelta: { [weak self] delta in
-                Task { @MainActor in
-                    self?.receive(delta, id: id)
-                }
-            },
             screenToolHandler: handler
         )
     }
-
-    private var streamedText = ""
-
-    private func receive(_ delta: String, id: UUID) {
+    private func update(_ activity: PetActivity, _ message: String, id: UUID) {
         guard isCurrent(id) else { return }
-        streamedText = String((streamedText + delta).suffix(2_000))
-        let message = "Codex 正在回复：\(Self.compact(String(streamedText.suffix(160))))"
-        switch state {
-        case var .answering(session) where session.id == id:
-            session.message = message
-            state = .answering(session)
-        case var .takeover(session) where session.id == id:
-            session.message = message
-            state = .takeover(session)
-        default: return
-        }
+        snapshot.activity = activity
+        snapshot.message = message
         publish()
     }
-
-    private func updateAnswer(
-        _ id: UUID,
-        phase: SessionPhase,
-        message: String
-    ) {
-        guard case var .answering(session) = state, session.id == id else { return }
-        session.phase = phase
-        session.message = message
-        state = .answering(session)
-        publish()
-    }
-
-    private func updateTakeover(
-        _ id: UUID,
-        _ change: (inout TakeoverSession) -> Void
-    ) {
-        guard case var .takeover(session) = state, session.id == id else { return }
-        change(&session)
-        state = .takeover(session)
-        publish()
-    }
-
     private func appendEvent(
         _ activity: PetActivity,
-        _ message: String?,
-        kind: ActivityEventKind = .status,
+        _ rawMessage: String?,
         details: String? = nil,
         sequence: Int? = nil,
-        id: UUID? = nil
+        id: UUID
     ) {
-        guard let message, !Self.compact(message).isEmpty else { return }
-        let targetID = id ?? takeoverRequestID
-        guard let targetID,
-              case var .takeover(session) = state,
-              session.id == targetID else { return }
+        guard isCurrent(id), let rawMessage else { return }
+        let message = Self.compact(rawMessage)
+        guard !message.isEmpty else { return }
         let event = ActivityEvent(
             activity: activity,
-            message: Self.compact(message),
-            kind: kind,
+            message: message,
             sequence: sequence,
             details: details
         )
-        if session.events.last != event { session.events.append(event) }
-        if session.events.count > AppMetadata.takeoverEventLimit {
-            session.events.removeFirst(
-                session.events.count - AppMetadata.takeoverEventLimit
-            )
-        }
-        state = .takeover(session)
+        if snapshot.events.last != event { snapshot.events.append(event) }
+        snapshot.events = Array(snapshot.events.suffix(AppMetadata.takeoverEventLimit))
         publish()
     }
-
-    private func presentAnswer(
-        preferences: AssistantPreferences,
-        message: String,
-        phase: SessionPhase = .finished,
-        failure: PetFailure? = nil
-    ) {
-        state = .presenting(PresentedResult(
-            source: .answer(preferences),
-            phase: phase,
-            message: message,
-            failure: failure,
-            events: []
-        ))
-        publish()
-    }
-
     private func presentTakeover(
+        _ message: String,
         id: UUID,
-        message: String,
-        phase: SessionPhase = .finished,
-        failure: PetFailure? = nil
+        activity: PetActivity = .success
     ) {
-        guard case let .takeover(session) = state, session.id == id else { return }
-        state = .presenting(PresentedResult(
-            source: .takeover(session.request),
-            phase: phase,
-            message: message,
-            failure: failure,
-            events: session.events
-        ))
+        guard isCurrent(id), let request = snapshot.request else { return }
+        currentID = nil
+        observation = nil
+        snapshot.mode = .takingOver
+        snapshot.activity = activity
+        snapshot.message = message
+        snapshot.request = request
         publish()
     }
-
-    private func publish() {
-        snapshot = switch state {
-        case .idle:
-            SessionSnapshot(mode: .idle, phase: .idle)
-        case let .answering(session):
-            SessionSnapshot(
-                mode: .answering,
-                phase: session.phase,
-                message: session.message
-            )
-        case let .takeover(session):
-            SessionSnapshot(
-                mode: .takingOver,
-                phase: session.phase,
-                message: session.message,
-                events: session.events,
-                request: session.request
-            )
-        case let .presenting(result):
-            switch result.source {
-            case .answer:
-                SessionSnapshot(
-                    mode: .presentingAnswer,
-                    phase: result.phase,
-                    message: result.message,
-                    failure: result.failure
-                )
-            case let .takeover(request):
-                SessionSnapshot(
-                    mode: .presentingTakeover,
-                    phase: result.phase,
-                    message: result.message,
-                    failure: result.failure,
-                    events: result.events,
-                    request: request
-                )
-            }
-        }
-        onSnapshot?(snapshot)
+    private func request(_ id: UUID) -> TakeoverRequest? {
+        isCurrent(id) && snapshot.isTakingOver ? snapshot.request : nil
     }
-
-    private var answerPreferences: AssistantPreferences? {
-        switch state {
-        case let .answering(session): session.preferences
-        case let .presenting(result):
-            if case let .answer(preferences) = result.source { preferences } else { nil }
-        default: nil
-        }
-    }
-
-    private var takeoverRequestID: UUID? {
-        if case let .takeover(session) = state { session.id } else { nil }
-    }
-
-    private var takeoverRequest: TakeoverRequest? {
-        if case let .takeover(session) = state { session.request } else { nil }
-    }
-
-    private var takeoverEvents: [ActivityEvent] {
-        if case let .takeover(session) = state { session.events } else { [] }
-    }
-
-    private func takeoverRequest(_ id: UUID) -> TakeoverRequest? {
-        guard case let .takeover(session) = state, session.id == id else { return nil }
-        return session.request
-    }
-
-    private func takeoverObservation(_ id: UUID) -> ScreenObservation? {
-        guard case let .takeover(session) = state, session.id == id else { return nil }
-        return session.observation
-    }
-
-    private func takeoverNeedsFinalObservation(_ id: UUID) -> Bool {
-        guard case let .takeover(session) = state, session.id == id else { return true }
-        return session.observation == nil
-    }
-
-    private func nextSequence(_ id: UUID) -> Int {
-        guard case var .takeover(session) = state, session.id == id else { return 0 }
-        session.sequence += 1
-        state = .takeover(session)
-        return session.sequence
-    }
-
     private func isCurrent(_ id: UUID) -> Bool {
-        switch state {
-        case let .answering(session): session.id == id
-        case let .takeover(session): session.id == id
-        default: false
-        }
+        currentID == id && snapshot.isActive
     }
-
     private func ensureCurrent(_ id: UUID) throws {
         try Task.checkCancellation()
         guard isCurrent(id) else { throw CancellationError() }
     }
-
     private func cancelWork() {
         codex.cancel()
         screen.cancel()
-        streamedText = ""
     }
-
-    private func render(_ snapshot: ScreenSemantics?) -> String {
-        guard let snapshot else { return "没有可读取的 Accessibility 结构。" }
-        let header = "应用：\(snapshot.applicationName) · 窗口：\(snapshot.windowTitle) · 网址：\(snapshot.pageURL ?? "未知")"
-        let valueLimit = max(80, min(1_000, 20_000 / max(1, snapshot.elements.count)))
-        let elements = snapshot.elements.map { element in
-            let value = bounded(element.value ?? "", limit: valueLimit)
+    private func begin(
+        mode: SessionMode,
+        activity: PetActivity,
+        message: String,
+        preferences: AssistantPreferences? = nil,
+        request: TakeoverRequest? = nil
+    ) -> UUID {
+        cancelWork()
+        let id = UUID()
+        currentID = id
+        answerPreferences = preferences
+        observation = nil
+        publish(.init(mode: mode, activity: activity, message: message, request: request))
+        return id
+    }
+    private func publish(_ value: SessionSnapshot? = nil) {
+        if let value { snapshot = value }
+        onSnapshot?(snapshot)
+    }
+    private func render(_ semantics: ScreenSemantics?) -> String {
+        guard let semantics else { return "没有可读取的 Accessibility 结构。" }
+        let header = "应用：\(semantics.applicationName) · 窗口：\(semantics.windowTitle) · 网址：\(semantics.pageURL ?? "未知")"
+        let limit = max(80, min(1_000, 20_000 / max(1, semantics.elements.count)))
+        let elements = semantics.elements.map { element in
+            let value = bounded(element.value ?? "", limit: limit)
             return "\(element.id) 父级=\(element.parentID ?? "无") 角色=\(element.role.rawValue) 名称=\(String(reflecting: element.label)) 值=\(String(reflecting: value)) 区域=\(element.frame.x),\(element.frame.y),\(element.frame.width),\(element.frame.height)"
         }
-        return ([header, "可读正文：\(snapshot.readableText ?? "无")"] + elements)
-            .joined(separator: "\n")
+        return ([header] + elements).joined(separator: "\n")
     }
-
-    private func actionDescription(_ action: ScreenAction) -> String {
-        switch action {
-        case .click: "单击当前目标"
-        case .doubleClick: "双击当前目标"
-        case let .drag(fromX, fromY, toX, toY, duration):
-            "从 (\(fromX), \(fromY)) 拖到 (\(toX), \(toY))，持续 \(duration) 毫秒"
-        case let .typeText(_, text): "渐入完整目标文本，共 \(text.count) 个字符"
-        case let .keyPress(key, modifiers):
-            "按键 \((modifiers.map(\.rawValue) + [key.rawValue]).joined(separator: "+"))"
-        case let .navigate(url): "打开 \(url)"
-        case let .scroll(_, x, y): "滚动 x=\(x), y=\(y)"
-        case let .wait(milliseconds): "等待 \(milliseconds) 毫秒"
-        }
-    }
-
     private func bounded(_ value: String, limit: Int) -> String {
         guard value.count > limit else { return value }
         let head = max(1, limit * 2 / 3)
         return "\(value.prefix(head))\n…\n\(value.suffix(limit - head))"
     }
-
     private func failureMessage(_ error: Error) -> String {
         (error as? PetFailure)?.localizedDescription ?? error.localizedDescription
     }
-
-    private static func bounded(_ value: String?) -> String? {
-        let value = String((value ?? "").trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).prefix(4_000))
-        return value.isEmpty ? nil : value
-    }
-
     private static func compact(_ value: String) -> String {
         String(value.replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))

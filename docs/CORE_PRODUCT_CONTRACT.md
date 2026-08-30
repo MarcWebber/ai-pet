@@ -18,8 +18,8 @@ JellyPet 是一个 macOS 桌宠，只有两个工作模式。
 ### 1.2 屏幕接管
 
 - 用户打开主气泡中的接管开关并提交任务后，Codex 可以观察和操作当前界面。
-- 原子操作只有：观察、单击、双击、逐字输入、按键、滚动、拖动、导航和等待。
-- 组合操作只有一种便捷调用：激活目标一次，然后重新观察并验证后置条件；它不是权限边界。
+- 原子操作只有：观察、单击、双击、键入、按键、滚动、拖动、导航和等待。
+- 组合操作由 Codex 顺序调用原子操作完成，不再维护第二套组合工具实现。
 - 用户提交的任务就是本轮修改授权。JellyPet 不再增加审批、只读、确认或暂停门槛。
 - macOS 自己的屏幕录制和辅助功能权限仍然存在，这是系统边界，不是产品权限系统。
 - 接管可通过主气泡开关或“唤醒 / 停止”全局快捷键立即退出。快捷键必须一直显示在接管界面。
@@ -29,9 +29,9 @@ JellyPet 是一个 macOS 桌宠，只有两个工作模式。
 - 桌宠及 8 种活动动画：空闲、观察、思考、定位、操作、验证、完成、失败。
 - 主气泡中的接管状态必须明显：关闭为灰色，开启为绿色，执行中为橙色。
 - 粉彩设置页、Codex 连接状态、屏幕选择、模型、思考力度、会话轮数、自定义指令、
-  渐入速度、三组快捷键、过程详情、自定义 8×8 精灵图全部保留。
+  键入速度、三组快捷键、过程详情、自定义 8×8 精灵图全部保留。
 - 配置文件继续保存在 `~/Library/Application Support/JellyPet/config.json`；快捷键、
-  屏幕选择、渐入速度和本地回答历史继续使用 macOS 偏好存储。
+  屏幕选择、键入速度和本地回答历史继续使用 macOS 偏好存储。
 - 回答历史和快捷键是正式能力，不是调试功能。
 - 过程详情只展示同一会话产生的少量活动事件，不再引入独立 Ledger、Metrics 或第二套进度状态。
 
@@ -62,7 +62,7 @@ flowchart LR
 - 一次观察最多产生一张内存截图；交给 app-server 时只创建本轮临时文件，轮次结束立即删除，启动时清理异常残留。
 - 每个改变界面的动作都会让旧观察失效；Codex 下一步必须重新调用 `observe`。
 
-### 3.3 逐字输入是一套实现
+### 3.3 键入只有一套实现
 
 `type_text(locator, finalText)` 接收目标输入框和完整目标文本，但绝不直接替换完整值。
 
@@ -88,74 +88,79 @@ flowchart LR
   当前内容决定，不依赖上一轮“已经完成”的缓存。
 - 会话真正结束后不会在后台监控屏幕；用户再次唤醒时开启新一轮。
 
-### 3.5 激活并验证只是组合动作
+### 3.5 组合操作不增加执行路径
 
-- `activate_and_verify` 只是把“最新观察、激活一次、再次观察、检查条件”合并成一个原子调用。
-- 每次调用都按请求激活一次；是否再次调用由 Codex 根据用户任务和最新界面决定。
-- 它不保存跨调用的副作用记录，不做幂等拦截，也不限制普通 `click` 可以操作什么。
-- 后置条件未满足时，只返回这次真实观察到的失败，Codex 可以继续修改或再次执行。
+- Codex 通过 `observe → click/type_text → observe` 组合原子操作。
+- 产品层不再提供 `activate_and_verify`，不保存副作用记录，也不做幂等或权限拦截。
+- 每个动作只经过 `SessionController → ScreenDriver` 这一条路径。
 
 ## 4. 唯一状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
-    idle --> answering: 截图问答
-    idle --> takingOver: 提交接管任务
-    answering --> presenting: 回答 / 错误
-    takingOver --> observing: observe
-    observing --> deciding: 返回 Observation
-    deciding --> executing: 原子动作
-    executing --> verifying: 动作完成或失败，清空 observation
-    verifying --> observing: observe
-    deciding --> presenting: 已观察并确认完成
-    answering --> cancelled: 快捷键 / 关闭
-    takingOver --> cancelled: 快捷键 / 关闭开关
-    presenting --> idle: 关闭气泡
-    cancelled --> idle
+    idle --> answerObserve: 截图问答
+    state "answering / observing" as answerObserve
+    state "answering / thinking" as answerThink
+    state "answering / success|failure" as answerResult
+    answerObserve --> answerThink: 全屏截图完成
+    answerThink --> answerResult: Codex 返回
+    answerResult --> idle: 关闭气泡
+    idle --> takeoverThink: 提交接管任务
+    state "takingOver / thinking" as takeoverThink
+    state "takingOver / observing" as takeoverObserve
+    state "takingOver / locating|acting" as takeoverAct
+    state "takingOver / verifying" as takeoverVerify
+    state "takingOver / success|failure|idle" as takeoverResult
+    takeoverThink --> takeoverObserve: observe
+    takeoverObserve --> takeoverAct: 原子动作
+    takeoverAct --> takeoverVerify: 清空 observation
+    takeoverVerify --> takeoverObserve: 再次 observe
+    takeoverObserve --> takeoverResult: 已确认完成
+    takeoverThink --> takeoverResult: 快捷键 / 关闭开关
+    takeoverResult --> idle: 关闭气泡
 ```
 
-UI 动画状态从这个状态机映射得到，不再自己保存另一份“是否接管中”“是否完成”“是否历史模式”
-等互相可能冲突的布尔组合。
+`SessionMode` 只区分空闲、问答和接管；`PetActivity` 表示这一刻在观察、思考、定位、操作、
+验证、完成还是失败。UI 动画只读取这一份 Activity。回答历史位置只是气泡导航状态，不参与
+会话完成判断。
 
 ## 5. 核心数据结构
 
 重写后核心只保留下列结构；同一事实只能存在一份。
 
 ```swift
-enum AppSession {
-    case idle
-    case answering(AnswerSession)
-    case takeover(TakeoverSession)
-    case presenting(PresentedResult)
+enum SessionMode {
+    case idle, answering, takingOver
 }
 
-struct AnswerSession {
-    let id: UUID
+enum PetActivity {
+    case idle, observing, thinking, locating, acting, verifying, success, failure
+}
+
+struct SessionSnapshot {
+    var mode: SessionMode
+    var activity: PetActivity
+    var message: String?
+    var events: [ActivityEvent]
+    var request: TakeoverRequest?
+}
+
+struct TakeoverRequest {
     let displayID: UInt32
-    let question: String?
-    let preferences: AssistantPreferences
-}
-
-struct TakeoverSession {
-    let id: UUID
-    let request: TakeoverRequest
-    var phase: SessionPhase
-    var observation: ScreenObservation?
-    var events: [ActivityEvent]       // 小型环形列表，仅供 UI 展示
+    let task: String?
+    let assistantPreferences: AssistantPreferences
 }
 
 struct ScreenObservation {
-    let displayID: UInt32
     let semantics: ScreenSemantics?
-    let screenshotPNG: Data?
+    let screenshotPNG: Data
 }
 
 struct ScreenSemantics {
     let applicationName: String
     let windowTitle: String
     let pageURL: String?
-    let readableText: String?
     let elements: [ScreenElement]
 }
 
@@ -169,42 +174,46 @@ struct ScreenElement {
     let isEnabled: Bool
 }
 
-struct ElementLocator: Codable {
-    let scope: LocatorScope?
+struct ElementLocator: Decodable {
+    let application: TextMatcher?
+    let window: TextMatcher?
+    let pageURL: TextMatcher?
     let role: ElementRole?
     let label: TextMatcher?
     let value: TextMatcher?
-    let ancestor: AncestorMatcher?
+    let ancestorRole: ElementRole?
+    let ancestorLabel: TextMatcher?
+    let ancestorValue: TextMatcher?
     let ordinal: Int?
 }
 
-enum ScreenAction: Codable {
+enum ScreenAction: Decodable {
     case click(ElementTarget)
     case doubleClick(ElementTarget)
     case typeText(target: ElementTarget, text: String)
-    case keyPress(ScreenKey, modifiers: [KeyModifier])
+    case keyPress(key: ScreenKey, modifiers: [KeyModifier])
     case scroll(target: ElementTarget?, deltaX: Int, deltaY: Int)
-    case drag(from: NormalizedPoint, to: NormalizedPoint, durationMs: Int)
-    case navigate(URL)
+    case drag(fromX: Int, fromY: Int, toX: Int, toY: Int, durationMilliseconds: Int)
+    case navigate(url: String)
     case wait(milliseconds: Int)
 }
 
 struct ActivityEvent {
     let activity: PetActivity
     let message: String
-    let kind: ActivityEventKind
     let sequence: Int?
     let details: String?
 }
 
 enum TextEditPlan {
     case unchanged
-    case replace(range: NSRange, with: String)
+    case replace(location: Int, length: Int, text: String)
 }
 ```
 
-`CodexClient` 内部只保存一个进程、一个 thread ID、当前配置签名和有限最近对话；这些不是产品状态，
-不会复制进 `AppCoordinator` 或 `SessionController`。
+`SessionController` 私有地保存当前任务 ID、回答偏好、最近一次 `ScreenObservation` 和动作序号；
+这些事实没有第二份公开模型。`CodexClient` 内部只保存一个 app-server 进程、当前 thread/turn ID
+和有限最近对话；每轮只创建一个当前 Codex thread。
 
 `ActivityEvent` 只支持主气泡里的“过程详情”：普通模式显示最近几条摘要，详情模式按观察、动作、结果
 展示步骤和补充文字。它不驱动状态机、不持久化，也不作为完成条件；若将来删除过程详情，整个结构可以
@@ -218,13 +227,13 @@ enum TextEditPlan {
 - `JellyCore/ScreenModel.swift`：Observation、Locator、Action 和验证规则。
 - `JellyCore/TextEditing.swift`：最小差异和人类输入节奏，纯函数、可直接测试。
 - `JellyMac/CodexClient.swift`：Codex app-server 生命周期、线程和动态工具协议。
-- `JellyMac/ScreenDriver.swift`：全屏静默截图、Accessibility 观察、CGEvent 原子动作与输入读回。
+- `JellyMac/ScreenDriver.swift`：唯一屏幕入口；同目录的 Accessibility 与 CGEvent 文件只是它的
+  内部观察器和执行器，不是备用驱动。
 - `JellyApp/AppCoordinator.swift`：只连接 UI、设置和 `SessionController`，不实现第二套状态机。
 - 现有设置页、气泡、桌宠、配置存储可以保留视觉结果，但状态全部来自上述单一会话快照。
 
-上述核心执行链（状态机、Codex、观察/动作、定位和渐入）目标为 **3,000–5,000 行**；设置页、
-主气泡、桌宠、配置和快捷键是已确认的产品体验，单独统计并保留。两部分以及生产 Swift 总量都要
-如实报告，不能通过压缩排版或删除体验凑数字。
+生产 Swift 总量目标为 **3,000–5,000 行**。设置页、主气泡、桌宠、配置和快捷键都是目标的一部分，
+不能拆开口径，也不能通过压缩排版或删除体验凑数字。
 
 ## 7. 重写时必须删除的旧内容
 
@@ -241,10 +250,10 @@ enum TextEditPlan {
 ### 静态和行为
 
 - 全仓没有非 Codex Runtime、第二套屏幕驱动或第二套输入实现。
-- 全屏捕获命令/API 不含交互选区参数；换行和逐字输入路径不调用截图。
-- 配置、历史、三组快捷键、渐入速度、过程详情和自定义外形都有行为检查。
+- 全屏捕获命令/API 不含交互选区参数；换行和键入路径不调用截图。
+- 配置、历史、三组快捷键、键入速度、过程详情和自定义外形都有行为检查。
 - 最小文本差异覆盖：保留 starter code、修复中间损坏、输入中断、手工删改、Unicode 和换行。
-- `activate_and_verify` 覆盖：每次只激活一次、随后必定重新观察、成功与未满足都返回真实结果。
+- 组合操作覆盖：动作后旧观察清空，下一步必须显式重新观察真实结果。
 
 ### 构建和视觉
 

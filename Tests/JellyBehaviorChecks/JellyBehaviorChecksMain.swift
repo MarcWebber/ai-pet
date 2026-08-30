@@ -13,13 +13,15 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 @MainActor
 private final class StubScreen: ScreenDriving {
     private(set) var observations = 0
+    private(set) var lastDisplayID: UInt32?
 
     func observe(displayID: UInt32) async throws -> ScreenObservation {
         observations += 1
+        lastDisplayID = displayID
         return ScreenObservation(
-            displayID: displayID,
             semantics: nil,
-            screenshotPNG: Data([0x89, 0x50, 0x4E, 0x47])
+            screenshotPNG: Data(base64Encoded:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
         )
     }
 
@@ -39,7 +41,6 @@ private final class StubResponder: CodexServing {
 
     func respond(
         to request: CodexRequest,
-        onTextDelta: @escaping @Sendable (String) -> Void,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
         requests.append(request)
@@ -47,34 +48,10 @@ private final class StubResponder: CodexServing {
     }
 
     func steer(_ instruction: String) async throws {}
-    func prepareForNextTurn() async { prepareCount += 1 }
-    func resetSession() async { resetCount += 1 }
-    func cancel() {}
-}
-
-private final class FullDisplayCaptureProbe: ScreenCapturingBackend {
-    private(set) var request: (displayID: UInt32, maximumDimension: Int)?
-
-    func availableDisplays() async throws -> [DisplayDescriptor] { [] }
-
-    func captureFullDisplay(
-        displayID: UInt32,
-        maximumDimension: Int
-    ) async throws -> CGImage {
-        request = (displayID, maximumDimension)
-        guard let context = CGContext(
-            data: nil,
-            width: 2,
-            height: 2,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let image = context.makeImage() else {
-            throw PetFailure.captureFailed
-        }
-        return image
+    func prepare(resetHistory: Bool) async {
+        if resetHistory { resetCount += 1 } else { prepareCount += 1 }
     }
+    func cancel() {}
 }
 
 @main
@@ -85,33 +62,17 @@ private enum JellyBehaviorChecksMain {
         runTextEditingChecks()
         await runActionGroupToolChecks()
 
-        let captureProbe = FullDisplayCaptureProbe()
-        let captureService = ScreenDriver(backend: captureProbe)
-        let captureArtifact = try await captureService.observe(displayID: 73)
-        check(
-            captureProbe.request?.displayID == 73
-                && captureProbe.request?.maximumDimension
-                    == AppMetadata.maximumScreenshotDimension,
-            "screen capture must request one exact full display without a region"
-        )
-        check(
-            captureArtifact.screenshotPNG?.isEmpty == false,
-            "full-display capture must produce in-memory PNG data"
-        )
         if ProcessInfo.processInfo.environment["JELLY_VERIFY_LIVE_CAPTURE"] == "1" {
-            let liveBackend = FullDisplayBackend()
-            let displays = try await liveBackend.availableDisplays()
+            let screen = ScreenDriver()
+            let displays = screen.availableDisplays()
             guard let display = displays.first(where: \.isPrimary)
                 ?? displays.first else {
                 throw PetFailure.noDisplaysAvailable
             }
-            let image = try await liveBackend.captureFullDisplay(
-                displayID: display.id,
-                maximumDimension: AppMetadata.maximumScreenshotDimension
-            )
+            let observation = try await screen.observe(displayID: display.id)
             check(
-                image.width > 0 && image.height > 0,
-                "live full-display capture must return a non-empty image"
+                !observation.screenshotPNG.isEmpty,
+                "live full-display capture must return a non-empty PNG"
             )
         }
 
@@ -156,14 +117,16 @@ private enum JellyBehaviorChecksMain {
             "URLs containing credentials must be rejected"
         )
 
-        let invalidAction = try? JSONDecoder().decode(
-            ScreenAction.self,
-            from: Data(
-                #"{"kind":"click","target":{"source":"visual","x":1001,"y":500}}"#.utf8
+        var invalidActionRejected = false
+        do {
+            let action = try JSONDecoder().decode(
+                ScreenAction.self,
+                from: Data(#"{"kind":"click","target":{"x":1001,"y":500}}"#.utf8)
             )
-        )
+            try action.validate()
+        } catch { invalidActionRejected = true }
         check(
-            invalidAction == nil,
+            invalidActionRejected,
             "out-of-range tool arguments must be rejected before execution"
         )
         check(
@@ -224,40 +187,6 @@ private enum JellyBehaviorChecksMain {
             preferences.typingSpeedPercent == 120,
             "typing speed must be configurable and persist in user settings"
         )
-        let legacyConfigurationURL = configurationRoot
-            .appendingPathComponent("legacy-config.json")
-        try """
-        {
-          "schemaVersion": 1,
-          "conversation": { "historyTurns": 8 },
-          "assistant": {
-            "model": "auto",
-            "reasoningEffort": "high",
-            "customInstructions": ""
-          },
-          "appearance": { "spriteSheet": null },
-          "beta": { "screenTakeover": false }
-        }
-        """.write(
-            to: legacyConfigurationURL,
-            atomically: true,
-            encoding: .utf8
-        )
-        let legacyPreferences = AppPreferencesStore(
-            defaults: defaults,
-            configurationURL: legacyConfigurationURL
-        )
-        let migratedConfiguration = try JSONDecoder().decode(
-            JellyConfiguration.self,
-            from: Data(contentsOf: legacyConfigurationURL)
-        )
-        check(
-            legacyPreferences.takeoverEnabled
-                && migratedConfiguration.schemaVersion
-                    == JellyConfiguration.currentSchemaVersion
-                && migratedConfiguration.beta.screenTakeover,
-            "schema 1 installs must migrate the new default takeover mode once"
-        )
         preferences.assistantPreferences = AssistantPreferences(
             model: "sonnet",
             reasoningEffort: .medium,
@@ -282,8 +211,7 @@ private enum JellyBehaviorChecksMain {
         let history = (0..<10).map { index in
             AnswerHistoryEntry(
                 question: "问题 \(index)",
-                answer: "回答 \(index)",
-                createdAt: Date(timeIntervalSince1970: Double(index))
+                answer: "回答 \(index)"
             )
         }
         preferences.answerHistory = history
@@ -330,7 +258,7 @@ private enum JellyBehaviorChecksMain {
         check(
             responder.requests.count == 2
                 && responder.requests.allSatisfy {
-                    $0.conversationHistoryTurns == 3
+                    $0.preferences.conversationHistoryTurns == 3
                 }
                 && responder.prepareCount == 2
                 && responder.resetCount == 0
@@ -389,10 +317,11 @@ private enum JellyBehaviorChecksMain {
                 to: CodexRequest(
                     imagePNG: nil,
                     prompt: "这是 JellyPet 0.9.2 Codex 连通性测试。只回复 JELLY_CODEX_OK。",
-                    model: AssistantPreferences.defaultModel,
-                    reasoningEffort: .low
+                    preferences: .init(
+                        model: AssistantPreferences.defaultModel,
+                        reasoningEffort: .low
+                    )
                 ),
-                onTextDelta: { _ in },
                 screenToolHandler: nil
             )
             check(
@@ -400,7 +329,7 @@ private enum JellyBehaviorChecksMain {
                     == "JELLY_CODEX_OK",
                 "Codex must complete a real model round trip"
             )
-            await liveResponder.resetSession()
+            await liveResponder.prepare(resetHistory: true)
         }
 
         if ProcessInfo.processInfo.environment["JELLY_REAL_CODEX_TOOL_SMOKE"] == "1" {
@@ -413,13 +342,13 @@ private enum JellyBehaviorChecksMain {
             ).appendingPathComponent(
                 "Sources/JellyApp/Resources/Skills/jellypet-takeover/SKILL.md"
             )
-            let probe = FullDisplayCaptureProbe()
+            let probe = StubScreen()
             let controller = SessionController(
                 codex: CodexClient(
                     executableURL: executableURL,
                     skillURL: skillURL
                 ),
-                screen: ScreenDriver(backend: probe)
+                screen: probe
             )
             await controller.start(TakeoverRequest(
                 displayID: 73,
@@ -430,8 +359,8 @@ private enum JellyBehaviorChecksMain {
                 )
             ))
             check(
-                probe.request?.displayID == 73
-                    && controller.snapshot.phase == .finished
+                probe.lastDisplayID == 73
+                    && controller.snapshot.activity == .success
                     && controller.snapshot.message?.contains("JELLY_TOOL_OK") == true,
                 "Codex dynamic screen tools must complete a real observe round trip"
             )

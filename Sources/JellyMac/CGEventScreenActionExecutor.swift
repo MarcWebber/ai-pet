@@ -9,9 +9,7 @@ final class CGEventScreenActionExecutor {
     private let semanticProvider: BrowserAccessibilityContextProvider
     private let typingSpeedPercent: () -> Int
     private let source = CGEventSource(stateID: .privateState)
-    private let mouseLock = NSLock()
     private var activeMouseUpPoint: CGPoint?
-
     init(
         semanticProvider: BrowserAccessibilityContextProvider,
         typingSpeedPercent: @escaping () -> Int = {
@@ -21,14 +19,12 @@ final class CGEventScreenActionExecutor {
         self.semanticProvider = semanticProvider
         self.typingSpeedPercent = typingSpeedPercent
     }
-
     func execute(
         _ action: ScreenAction,
         snapshot: ScreenSemantics?,
         displayID: UInt32
     ) async throws {
-        try action.validate()
-        let bounds = try onlineBounds(displayID)
+        let bounds = try ScreenDriver.onlineBounds(displayID)
         switch action {
         case let .click(target):
             if try performSemanticActivation(target, snapshot: snapshot) { return }
@@ -44,12 +40,6 @@ final class CGEventScreenActionExecutor {
                 duration: duration
             )
         case let .typeText(target, text):
-            guard semanticValue(
-                for: target,
-                snapshot: snapshot
-            ) != nil else {
-                throw PetFailure.editorTextUnavailable
-            }
             let focusedElement = try await focusTextTarget(
                 target,
                 snapshot: snapshot,
@@ -59,14 +49,9 @@ final class CGEventScreenActionExecutor {
         case let .keyPress(key, modifiers):
             try keyPress(key, modifiers)
         case let .navigate(url):
-            let bundleID = await MainActor.run {
-                NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            guard let destination = URL(string: url), NSWorkspace.shared.open(destination) else {
+                throw PetFailure.screenActionFailed
             }
-            let key: ScreenKey = AccessibilityPolicy.navigationEntry(
-                frontmostBundleID: bundleID
-            ) == .addressBar ? .l : .space
-            try keyPress(key, [.command]); try await pause(400)
-            try await type(url); try keyPress(.return, [])
         case let .scroll(target, deltaX, deltaY):
             let point = try target.map {
                 try coordinate($0, snapshot, in: bounds)
@@ -77,9 +62,7 @@ final class CGEventScreenActionExecutor {
             try await pause(milliseconds)
         }
     }
-
     func cancel() { releaseMouseIfNeeded() }
-
     private func nativeElement(
         _ target: ElementTarget,
         snapshot: ScreenSemantics?
@@ -98,7 +81,6 @@ final class CGEventScreenActionExecutor {
         }
         return element
     }
-
     private func performSemanticActivation(
         _ target: ElementTarget,
         snapshot: ScreenSemantics?
@@ -110,13 +92,11 @@ final class CGEventScreenActionExecutor {
         }
         return false
     }
-
     private func axActions(_ element: AXUIElement) -> [String]? {
         var names: CFArray?
         guard AXUIElementCopyActionNames(element, &names) == .success else { return nil }
         return names as? [String]
     }
-
     private func coordinate(
         _ target: ElementTarget,
         _ snapshot: ScreenSemantics?,
@@ -124,14 +104,14 @@ final class CGEventScreenActionExecutor {
     ) throws -> CGPoint {
         switch target {
         case let .visual(x, y):
-            return try coordinate(x, y, in: bounds)
+            return coordinate(x, y, in: bounds)
         case let .element(elementID):
             guard let element = snapshot?.elements.first(where: {
                 $0.id == elementID
             }), element.isEnabled, element.frame.isValid else {
                 throw PetFailure.semanticTargetUnavailable
             }
-            return try coordinate(
+            return coordinate(
                 element.frame.centerX,
                 element.frame.centerY,
                 in: bounds
@@ -142,15 +122,6 @@ final class CGEventScreenActionExecutor {
             throw PetFailure.semanticTargetUnavailable
         }
     }
-
-    private func semanticValue(
-        for target: ElementTarget,
-        snapshot: ScreenSemantics?
-    ) -> String? {
-        guard case let .element(elementID) = target else { return nil }
-        return snapshot?.elements.first(where: { $0.id == elementID })?.value
-    }
-
     private func focusTextTarget(
         _ target: ElementTarget,
         snapshot: ScreenSemantics?,
@@ -159,17 +130,11 @@ final class CGEventScreenActionExecutor {
         guard let element = try nativeElement(target, snapshot: snapshot) else {
             throw PetFailure.semanticTargetUnavailable
         }
-        var processID: pid_t = 0
-        let pidStatus = AXUIElementGetPid(element, &processID)
-        guard pidStatus == .success else {
-            throw PetFailure.inputFocusChanged
-        }
         try click(at: coordinate(target, snapshot, in: bounds), count: 1)
         try await pause(120)
         try ensureFocused(element)
         return element
     }
-
     private func ensureFocused(_ expected: AXUIElement) throws {
         var processID: pid_t = 0
         guard AXUIElementGetPid(expected, &processID) == .success,
@@ -180,20 +145,10 @@ final class CGEventScreenActionExecutor {
         guard let focused = focusedElement(processID: processID) else {
             throw PetFailure.inputFocusChanged
         }
-        if isSameOrDescendant(focused, of: expected) { return }
-        guard isEditorSuggestion(focused) else {
-            throw PetFailure.inputFocusChanged
-        }
-        try keyPress(.escape, [])
-        usleep(150_000)
-        guard let restored = focusedElement(processID: processID) else {
-            throw PetFailure.inputFocusChanged
-        }
-        guard isSameOrDescendant(restored, of: expected) else {
+        guard isSameOrDescendant(focused, of: expected) else {
             throw PetFailure.inputFocusChanged
         }
     }
-
     private func focusedElement(processID: pid_t) -> AXUIElement? {
         let application = AXUIElementCreateApplication(processID)
         var value: CFTypeRef?
@@ -208,7 +163,6 @@ final class CGEventScreenActionExecutor {
         }
         return unsafeBitCast(value, to: AXUIElement.self)
     }
-
     private func isSameOrDescendant(
         _ element: AXUIElement,
         of ancestor: AXUIElement
@@ -231,68 +185,12 @@ final class CGEventScreenActionExecutor {
         }
         return false
     }
-
-    private func isEditorSuggestion(_ element: AXUIElement) -> Bool {
-        var current: AXUIElement? = element
-        for _ in 0..<16 {
-            guard let value = current else { return false }
-            var roleValue: CFTypeRef?, descriptionValue: CFTypeRef?
-            _ = AXUIElementCopyAttributeValue(
-                value,
-                kAXRoleAttribute as CFString,
-                &roleValue
-            )
-            _ = AXUIElementCopyAttributeValue(
-                value,
-                kAXDescriptionAttribute as CFString,
-                &descriptionValue
-            )
-            if roleValue as? String == kAXListRole,
-               descriptionValue as? String == "Suggest" {
-                return true
-            }
-            var parentValue: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(
-                value,
-                kAXParentAttribute as CFString,
-                &parentValue
-            ) == .success,
-                  let parentValue,
-                  CFGetTypeID(parentValue) == AXUIElementGetTypeID() else {
-                return false
-            }
-            current = unsafeBitCast(parentValue, to: AXUIElement.self)
-        }
-        return false
-    }
-
-    private func onlineBounds(_ displayID: UInt32) throws -> CGRect {
-        var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else {
-            throw PetFailure.selectedDisplayUnavailable
-        }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
-        guard CGGetOnlineDisplayList(count, &ids, &count) == .success,
-              ids.prefix(Int(count)).contains(displayID) else {
-            throw PetFailure.selectedDisplayUnavailable
-        }
-        let bounds = CGDisplayBounds(displayID)
-        guard bounds.width > 0, bounds.height > 0 else {
-            throw PetFailure.selectedDisplayUnavailable
-        }
-        return bounds
-    }
-
-    private func coordinate(_ x: Int, _ y: Int, in bounds: CGRect) throws -> CGPoint {
-        guard (0...1_000).contains(x), (0...1_000).contains(y) else {
-            throw PetFailure.invalidScreenAction
-        }
-        return CGPoint(
+    private func coordinate(_ x: Int, _ y: Int, in bounds: CGRect) -> CGPoint {
+        CGPoint(
             x: bounds.minX + CGFloat(x) / 1_000 * bounds.width,
             y: bounds.minY + CGFloat(y) / 1_000 * bounds.height
         )
     }
-
     private func click(at point: CGPoint, count: Int) throws {
         try move(to: point)
         for index in 1...count {
@@ -304,7 +202,6 @@ final class CGEventScreenActionExecutor {
             if index < count { usleep(80_000) }
         }
     }
-
     private func drag(from start: CGPoint, to end: CGPoint, duration: Int) async throws {
         try move(to: start)
         post(try mouseEvent(.leftMouseDown, start))
@@ -323,7 +220,6 @@ final class CGEventScreenActionExecutor {
             try await Task.sleep(nanoseconds: UInt64(duration) * 1_000_000 / UInt64(steps))
         }
     }
-
     private func type(
         _ text: String,
         focusedElement: AXUIElement? = nil
@@ -338,12 +234,12 @@ final class CGEventScreenActionExecutor {
             if let focusedElement { try ensureTypingProcess(focusedElement) }
             if let mistake = stroke.mistypedText {
                 try emit(mistake)
-                try await pause(stroke.mistakeDelayMilliseconds)
+                try await pause(stroke.delayAfterMilliseconds * 2)
                 if let focusedElement {
                     try ensureTypingProcess(focusedElement)
                 }
                 try keyPress(.delete, [])
-                try await pause(stroke.correctionDelayMilliseconds)
+                try await pause(stroke.delayAfterMilliseconds)
             }
             // Newlines are Unicode text events, never physical Return key events.
             // This keeps global shortcut managers (including Feishu capture)
@@ -352,7 +248,6 @@ final class CGEventScreenActionExecutor {
             try await pause(stroke.delayAfterMilliseconds)
         }
     }
-
     private func insert(
         _ text: String,
         focusedElement: AXUIElement
@@ -383,7 +278,6 @@ final class CGEventScreenActionExecutor {
             try await pause(180)
         }
     }
-
     private func editorText(_ element: AXUIElement) throws -> String {
         var rawValue: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
@@ -396,7 +290,6 @@ final class CGEventScreenActionExecutor {
         }
         return value
     }
-
     private func selectTextRange(
         location: Int,
         length: Int,
@@ -413,7 +306,6 @@ final class CGEventScreenActionExecutor {
             throw PetFailure.inputFocusChanged
         }
     }
-
     private func ensureTypingProcess(_ expected: AXUIElement) throws {
         var processID: pid_t = 0
         guard AXUIElementGetPid(expected, &processID) == .success,
@@ -422,7 +314,6 @@ final class CGEventScreenActionExecutor {
             throw PetFailure.inputFocusChanged
         }
     }
-
     private func emit(_ text: String) throws {
         let events = try [keyboardEvent(0, true), keyboardEvent(0, false)]
         let utf16 = Array(text.utf16)
@@ -438,7 +329,6 @@ final class CGEventScreenActionExecutor {
         }
         events.forEach(post)
     }
-
     private func keyPress(_ key: ScreenKey, _ modifiers: [KeyModifier]) throws {
         let code = Self.keyCodes[key]!
         let events = try [keyboardEvent(code, true), keyboardEvent(code, false)]
@@ -447,7 +337,6 @@ final class CGEventScreenActionExecutor {
         }
         events.forEach { $0.flags = flags; post($0) }
     }
-
     private static let keyCodes: [ScreenKey: CGKeyCode] = [
         .a: CGKeyCode(kVK_ANSI_A), .l: CGKeyCode(kVK_ANSI_L),
         .r: CGKeyCode(kVK_ANSI_R), .t: CGKeyCode(kVK_ANSI_T),
@@ -464,9 +353,7 @@ final class CGEventScreenActionExecutor {
         .command: .maskCommand, .control: .maskControl,
         .option: .maskAlternate, .shift: .maskShift
     ]
-
     private func scroll(x: Int, y: Int) async throws {
-        let x = min(420, max(-420, x)), y = min(420, max(-420, y))
         let steps = max(3, min(6, Int(ceil(Double(max(abs(x), abs(y))) / 70))))
         var posted = (x: 0, y: 0)
         for step in 1...steps {
@@ -484,13 +371,11 @@ final class CGEventScreenActionExecutor {
             try await pause(90)
         }
     }
-
     private func keyboardEvent(_ key: CGKeyCode, _ down: Bool) throws -> CGEvent {
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
         else { throw PetFailure.screenActionFailed }
         return event
     }
-
     private func mouseEvent(_ type: CGEventType, _ point: CGPoint) throws -> CGEvent {
         guard let event = CGEvent(
             mouseEventSource: source, mouseType: type,
@@ -498,7 +383,6 @@ final class CGEventScreenActionExecutor {
         ) else { throw PetFailure.screenActionFailed }
         return event
     }
-
     private func move(to point: CGPoint) throws { post(try mouseEvent(.mouseMoved, point)) }
     private func pause(_ milliseconds: Int) async throws {
         try await Task.sleep(nanoseconds: UInt64(milliseconds) * 1_000_000)
@@ -508,10 +392,11 @@ final class CGEventScreenActionExecutor {
         event.post(tap: .cghidEventTap)
     }
     private func setMouseUp(_ point: CGPoint) {
-        mouseLock.withLock { activeMouseUpPoint = point }
+        activeMouseUpPoint = point
     }
     private func releaseMouseIfNeeded() {
-        let point = mouseLock.withLock { let value = activeMouseUpPoint; activeMouseUpPoint = nil; return value }
+        let point = activeMouseUpPoint
+        activeMouseUpPoint = nil
         if let point, let event = try? mouseEvent(.leftMouseUp, point) { post(event) }
     }
 }

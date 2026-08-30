@@ -1,25 +1,10 @@
 import Foundation
 
-public struct TypingStroke: Codable, Equatable, Sendable {
+public struct TypingStroke: Equatable, Sendable {
     public let text: String
     public let mistypedText: String?
-    public let mistakeDelayMilliseconds: Int
-    public let correctionDelayMilliseconds: Int
     public let delayAfterMilliseconds: Int
 
-    public init(
-        text: String,
-        mistypedText: String?,
-        mistakeDelayMilliseconds: Int,
-        correctionDelayMilliseconds: Int,
-        delayAfterMilliseconds: Int
-    ) {
-        self.text = text
-        self.mistypedText = mistypedText
-        self.mistakeDelayMilliseconds = mistakeDelayMilliseconds
-        self.correctionDelayMilliseconds = correctionDelayMilliseconds
-        self.delayAfterMilliseconds = delayAfterMilliseconds
-    }
 }
 
 public enum TextEditPlan: Equatable, Sendable {
@@ -33,11 +18,10 @@ public enum TextEditPlan: Equatable, Sendable {
 
 public enum TextEditing {
     public static func make(
-        currentText: String?,
+        currentText: String,
         desiredText: String
-    ) -> TextEditPlan? {
+    ) -> TextEditPlan {
         let desired = normalize(desiredText)
-        guard let currentText else { return nil }
         let current = normalize(currentText)
         guard current != desired else { return .unchanged }
 
@@ -62,7 +46,6 @@ public enum TextEditing {
             text: String(new[prefixCount..<newEnd])
         )
     }
-
     public static func normalize(_ text: String) -> String {
         text.replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -73,7 +56,6 @@ public enum TypingRhythm {
     public static let minimumSpeedPercent = 40
     public static let maximumSpeedPercent = 160
     public static let defaultSpeedPercent = 80
-
     public static func strokes(
         for text: String,
         seed: UInt64,
@@ -97,14 +79,6 @@ public enum TypingRhythm {
             return TypingStroke(
                 text: value,
                 mistypedText: mistyped,
-                mistakeDelayMilliseconds: scaled(
-                    random.value(in: 85...180),
-                    for: speedPercent
-                ),
-                correctionDelayMilliseconds: scaled(
-                    random.value(in: 60...135),
-                    for: speedPercent
-                ),
                 delayAfterMilliseconds: scaled(
                     delay(after: character, random: &random),
                     for: speedPercent
@@ -112,11 +86,9 @@ public enum TypingRhythm {
             )
         }
     }
-
     public static func normalizedSpeedPercent(_ value: Int) -> Int {
         min(max(value, minimumSpeedPercent), maximumSpeedPercent)
     }
-
     private static func scaled(_ milliseconds: Int, for speedPercent: Int) -> Int {
         let speed = normalizedSpeedPercent(speedPercent)
         return max(
@@ -124,7 +96,6 @@ public enum TypingRhythm {
             Int((Double(milliseconds) * 100 / Double(speed)).rounded())
         )
     }
-
     private static func delay(
         after character: Character,
         random: inout TypingRandom
@@ -137,7 +108,6 @@ public enum TypingRhythm {
         default: random.value(in: 48...108)
         }
     }
-
     private static func wrongCharacter(
         for character: Character,
         random: inout TypingRandom
@@ -165,11 +135,9 @@ public enum TypingRhythm {
 
 private struct TypingRandom {
     private var state: UInt64
-
     init(seed: UInt64) {
         state = seed == 0 ? 0x9E3779B97F4A7C15 : seed
     }
-
     mutating func value(in range: ClosedRange<Int>) -> Int {
         state ^= state << 13
         state ^= state >> 7

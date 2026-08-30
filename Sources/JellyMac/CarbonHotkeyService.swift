@@ -9,18 +9,14 @@ public final class CarbonHotkeyService {
         case answerHistoryPrevious = 4
         case answerHistoryNext = 5
     }
-
     private static let signature = OSType(0x4A454C59)
-
     private var hotKeys: [Action: EventHotKeyRef] = [:]
-    private var callbacks: [Action: () -> Void] = [:]
+    private var callbacks: [Action: @MainActor () -> Void] = [:]
     private var handler: EventHandlerRef?
-
     public init() {}
-
     public func register(
         shortcut: GlobalShortcut = .controlOptionSpace,
-        callback: @escaping () -> Void
+        callback: @escaping @MainActor () -> Void
     ) throws {
         let components = components(for: shortcut)
         try register(
@@ -30,63 +26,47 @@ public final class CarbonHotkeyService {
             callback: callback
         )
     }
-
     public func registerAnswerScrolling(
-        shortcut: AnswerScrollShortcut,
-        onUp: @escaping () -> Void,
-        onDown: @escaping () -> Void
+        shortcut: ArrowShortcut,
+        onUp: @escaping @MainActor () -> Void,
+        onDown: @escaping @MainActor () -> Void
     ) throws {
-        unregister(.answerScrollUp)
-        unregister(.answerScrollDown)
-        let modifiers = modifiers(shortcut)
-        do {
-            try register(
-                action: .answerScrollUp,
-                keyCode: UInt32(kVK_UpArrow),
-                modifiers: modifiers,
-                callback: onUp
-            )
-            try register(
-                action: .answerScrollDown,
-                keyCode: UInt32(kVK_DownArrow),
-                modifiers: modifiers,
-                callback: onDown
-            )
-        } catch {
-            unregister(.answerScrollUp)
-            unregister(.answerScrollDown)
-            throw PetFailure.answerScrollShortcutUnavailable
-        }
+        try registerPair(
+            shortcut, actions: (.answerScrollUp, .answerScrollDown),
+            keys: (UInt32(kVK_UpArrow), UInt32(kVK_DownArrow)),
+            first: onUp, second: onDown, failure: .answerScrollShortcutUnavailable
+        )
     }
-
     public func registerAnswerHistoryNavigation(
-        shortcut: AnswerHistoryShortcut,
-        onPrevious: @escaping () -> Void,
-        onNext: @escaping () -> Void
+        shortcut: ArrowShortcut,
+        onPrevious: @escaping @MainActor () -> Void,
+        onNext: @escaping @MainActor () -> Void
     ) throws {
-        unregister(.answerHistoryPrevious)
-        unregister(.answerHistoryNext)
-        let modifiers = modifiers(shortcut)
+        try registerPair(
+            shortcut, actions: (.answerHistoryPrevious, .answerHistoryNext),
+            keys: (UInt32(kVK_LeftArrow), UInt32(kVK_RightArrow)),
+            first: onPrevious, second: onNext, failure: .answerHistoryShortcutUnavailable
+        )
+    }
+    private func registerPair(
+        _ shortcut: ArrowShortcut,
+        actions: (Action, Action),
+        keys: (UInt32, UInt32),
+        first: @escaping @MainActor () -> Void,
+        second: @escaping @MainActor () -> Void,
+        failure: PetFailure
+    ) throws {
+        unregister(actions.0); unregister(actions.1)
         do {
-            try register(
-                action: .answerHistoryPrevious,
-                keyCode: UInt32(kVK_LeftArrow),
-                modifiers: modifiers,
-                callback: onPrevious
-            )
-            try register(
-                action: .answerHistoryNext,
-                keyCode: UInt32(kVK_RightArrow),
-                modifiers: modifiers,
-                callback: onNext
-            )
+            try register(action: actions.0, keyCode: keys.0,
+                         modifiers: modifiers(shortcut), callback: first)
+            try register(action: actions.1, keyCode: keys.1,
+                         modifiers: modifiers(shortcut), callback: second)
         } catch {
-            unregister(.answerHistoryPrevious)
-            unregister(.answerHistoryNext)
-            throw PetFailure.answerHistoryShortcutUnavailable
+            unregister(actions.0); unregister(actions.1)
+            throw failure
         }
     }
-
     public func unregister() {
         for action in Action.allCases {
             unregister(action)
@@ -96,12 +76,11 @@ public final class CarbonHotkeyService {
         }
         handler = nil
     }
-
     private func register(
         action: Action,
         keyCode: UInt32,
         modifiers: UInt32,
-        callback: @escaping () -> Void
+        callback: @escaping @MainActor () -> Void
     ) throws {
         unregister(action)
         try installHandlerIfNeeded()
@@ -124,7 +103,6 @@ public final class CarbonHotkeyService {
         hotKeys[action] = hotKey
         callbacks[action] = callback
     }
-
     private func installHandlerIfNeeded() throws {
         guard handler == nil else { return }
         var eventType = EventTypeSpec(
@@ -158,7 +136,7 @@ public final class CarbonHotkeyService {
                 else {
                     return OSStatus(eventNotHandledErr)
                 }
-                callback()
+                MainActor.assumeIsolated { callback() }
                 return noErr
             },
             1,
@@ -171,14 +149,12 @@ public final class CarbonHotkeyService {
             throw PetFailure.shortcutUnavailable
         }
     }
-
     private func unregister(_ action: Action) {
         if let hotKey = hotKeys.removeValue(forKey: action) {
             UnregisterEventHotKey(hotKey)
         }
         callbacks[action] = nil
     }
-
     private func components(
         for shortcut: GlobalShortcut
     ) -> (keyCode: UInt32, modifiers: UInt32) {
@@ -193,8 +169,7 @@ public final class CarbonHotkeyService {
             (UInt32(kVK_Space), UInt32(cmdKey | shiftKey))
         }
     }
-
-    private func modifiers(_ shortcut: AnswerScrollShortcut) -> UInt32 {
+    private func modifiers(_ shortcut: ArrowShortcut) -> UInt32 {
         switch shortcut {
         case .controlOptionArrows: UInt32(controlKey | optionKey)
         case .controlShiftArrows: UInt32(controlKey | shiftKey)
@@ -202,16 +177,6 @@ public final class CarbonHotkeyService {
         case .commandShiftArrows: UInt32(cmdKey | shiftKey)
         }
     }
-
-    private func modifiers(_ shortcut: AnswerHistoryShortcut) -> UInt32 {
-        switch shortcut {
-        case .controlOptionArrows: UInt32(controlKey | optionKey)
-        case .controlShiftArrows: UInt32(controlKey | shiftKey)
-        case .commandOptionArrows: UInt32(cmdKey | optionKey)
-        case .commandShiftArrows: UInt32(cmdKey | shiftKey)
-        }
-    }
-
     deinit {
         unregister()
     }

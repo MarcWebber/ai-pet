@@ -24,7 +24,6 @@ public enum ResponsePrompts {
         不展示隐藏推理。可以使用代码围栏，不用 Markdown 表格；除代码外保持精炼，多题时优先覆盖全部题目，不得为了篇幅省略题目。
         """
     }
-
     public static func followUp(
         question: String,
         customInstructions: String
@@ -37,9 +36,7 @@ public enum ResponsePrompts {
         用户最新问题：\(question)
         """
     }
-
     private static let voice = "写得像真实交流，不固定使用标题或总结；没验证时用“可能”“看起来”说明。"
-
     private static func instructions(_ custom: String) -> String {
         let boundary = "只观察附带内容，不调用工具、执行命令、读取其他文件或修改外部状态。"
         let custom = custom.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,19 +1,13 @@
 import AppKit
-import CoreGraphics
 import Foundation
 import JellyCore
 import JellyMac
-import OSLog
 import UniformTypeIdentifiers
 
 @MainActor
 final class AppCoordinator {
-    private let sessionLog = Logger(
-        subsystem: AppMetadata.bundleIdentifier,
-        category: "session"
-    )
     private let preferencesStore: AppPreferencesStore
-    private let screenBackend = FullDisplayBackend()
+    private let screen: ScreenDriver
     private let hotkey = CarbonHotkeyService()
     private let pet = PetPanelController()
     private let bubble = BubblePanelController()
@@ -22,89 +16,45 @@ final class AppCoordinator {
     private let soundPlayer: SoundPlayer
     private let codexExecutableURL: URL?
     private let session: SessionController
-
     private var requestTask: Task<Void, Never>?
-    private var settingsTask: Task<Void, Never>?
-    private var lastActivity: PetActivity = .idle
     private var pendingAnswerQuestion: String?
-    private var answerHistory: [AnswerHistoryEntry] = []
     private var answerHistoryIndex: Int?
-
     init() {
-        let packagedConfiguration = Bundle.main.resourceURL?
-            .appendingPathComponent("JellyPetConfig.json")
-        let configurationTemplateURL = packagedConfiguration.flatMap {
-            FileManager.default.isReadableFile(atPath: $0.path) ? $0 : nil
-        } ?? Bundle.module.url(
-            forResource: "JellyPetConfig",
-            withExtension: "json"
-        )
+        let configurationTemplateURL = Self.packagedResource("JellyPetConfig.json")
+            ?? Bundle.module.url(forResource: "JellyPetConfig", withExtension: "json")
         let preferences = AppPreferencesStore(
             configurationTemplateURL: configurationTemplateURL
         )
         preferencesStore = preferences
         codexExecutableURL = CodexExecutableLocator.locate()
-        let packagedSkill = Bundle.main.resourceURL?
-            .appendingPathComponent("Skills/jellypet-takeover/SKILL.md")
-        let skillURL = packagedSkill.flatMap {
-            FileManager.default.isReadableFile(atPath: $0.path) ? $0 : nil
-        } ?? Bundle.module.url(
+        let skillURL = Self.packagedResource("Skills/jellypet-takeover/SKILL.md")
+            ?? Bundle.module.url(
             forResource: "SKILL",
             withExtension: "md",
             subdirectory: "Skills/jellypet-takeover"
         )
         let screen = ScreenDriver(
-            backend: screenBackend,
             typingSpeedPercent: { preferences.typingSpeedPercent }
         )
+        self.screen = screen
         session = SessionController(
-            codex: CodexClient(
-                executableURL: codexExecutableURL,
-                skillURL: skillURL
-            ),
+            codex: CodexClient(executableURL: codexExecutableURL, skillURL: skillURL),
             screen: screen
         )
-        soundPlayer = SoundPlayer(
-            resourceDirectory: Self.soundResourceDirectory()
-        )
-        answerHistory = preferencesStore.answerHistory
+        soundPlayer = SoundPlayer(resourceDirectory: Self.soundResourceDirectory())
     }
-
     func start() {
         wireActions()
         applyConfiguredSprite()
         pet.show(on: selectedNSScreen())
         pet.jellyView.apply(activity: .idle)
-        bubble.setTakeoverShortcutLabel(
-            preferencesStore.globalShortcut.label
-        )
+        bubble.setTakeoverShortcutLabel(preferencesStore.globalShortcut.label)
         updateMenu()
 
-        do {
-            try registerHotkey(preferencesStore.globalShortcut)
-        } catch {
-            showFailure(.shortcutUnavailable)
-        }
-        do {
-            try registerAnswerScrollHotkeys(
-                preferencesStore.answerScrollShortcut
-            )
-        } catch {
-            showFailure(.answerScrollShortcutUnavailable)
-        }
-        do {
-            try registerAnswerHistoryHotkeys(
-                preferencesStore.answerHistoryShortcut
-            )
-        } catch {
-            showFailure(.answerHistoryShortcutUnavailable)
-        }
-
+        installHotkeys()
     }
-
-    func stop() async {
+    func stop() {
         requestTask?.cancel()
-        settingsTask?.cancel()
         session.onSnapshot = nil
         if session.snapshot.isActive {
             session.cancel()
@@ -114,15 +64,14 @@ final class AppCoordinator {
         bubble.hide()
         pet.hide()
     }
-
     private func wireActions() {
-        session.onSnapshot = { [weak self] snapshot in
-            self?.handleSession(snapshot)
+        bubble.anchor = { [weak self] in
+            guard let self else { return (.zero, .main) }
+            return (self.pet.panel.frame, self.pet.panel.screen)
         }
+        session.onSnapshot = { [weak self] in self?.handleSession($0) }
         pet.onClick = { [weak self] in
-            guard let self else {
-                return
-            }
+            guard let self else { return }
             if self.bubble.panel.isVisible {
                 self.closeBubble()
                 return
@@ -132,22 +81,12 @@ final class AppCoordinator {
             self.soundPlayer.play(.dock)
             self.showComposer()
         }
-        pet.onRightClick = { [weak self] in
-            self?.status.showMenu()
-        }
-        pet.onDock = { [weak self] in
-            self?.soundPlayer.play(.dock)
-        }
-        pet.onFrameChange = { [weak self] in
-            self?.repositionBubble()
-        }
+        pet.onRightClick = { [weak self] in self?.status.showMenu() }
+        pet.onDock = { [weak self] in self?.soundPlayer.play(.dock) }
+        pet.onFrameChange = { [weak self] in self?.bubble.reposition() }
 
-        bubble.onQuestionSubmit = { [weak self] question in
-            self?.performPrimaryAction(task: question)
-        }
-        bubble.onSubmit = { [weak self] question in
-            self?.submitFollowUp(question)
-        }
+        bubble.onQuestionSubmit = { [weak self] in self?.performPrimaryAction(task: $0) }
+        bubble.onSubmit = { [weak self] in self?.submitFollowUp($0) }
         bubble.onTakeoverSubmit = { [weak self] task in
             guard let self else { return }
             Task { @MainActor [weak self] in
@@ -157,12 +96,8 @@ final class AppCoordinator {
                 }
             }
         }
-        bubble.onTakeoverToggle = { [weak self] takeoverEnabled, text in
-            self?.changeMode(takeoverEnabled, preserving: text)
-        }
-        bubble.onClose = { [weak self] in
-            self?.closeBubble()
-        }
+        bubble.onTakeoverToggle = { [weak self] in self?.changeMode($0, preserving: $1) }
+        bubble.onClose = { [weak self] in self?.closeBubble() }
 
         settings.form.onAction = { [weak self] action in
             guard let self else { return }
@@ -170,20 +105,8 @@ final class AppCoordinator {
             case let .display(id):
                 self.preferencesStore.selectedDisplayID = id
                 self.pet.placeAtBottomRight(of: self.nsScreen(for: id))
-                self.refreshCurrentSettings()
             case let .assistant(value):
-                let previousTurns = self.preferencesStore
-                    .conversationHistoryTurns
                 self.preferencesStore.assistantPreferences = value
-                if previousTurns != value.conversationHistoryTurns {
-                    self.answerHistory = Array(
-                        self.answerHistory.suffix(
-                            value.conversationHistoryTurns
-                        )
-                    )
-                    self.preferencesStore.answerHistory = self.answerHistory
-                }
-                self.refreshCurrentSettings()
             case let .activityDetails(value): self.preferencesStore.showActivityDetails = value
             case let .typingSpeed(value):
                 self.preferencesStore.typingSpeedPercent = value
@@ -192,8 +115,7 @@ final class AppCoordinator {
                 self.changeAnswerScrollShortcut(value)
             case let .answerHistoryShortcut(value):
                 self.changeAnswerHistoryShortcut(value)
-            case .chooseSprite:
-                self.chooseSpriteSheet()
+            case .chooseSprite: Task { await self.chooseSpriteSheet() }
             case .resetSprite:
                 self.resetSpriteSheet()
             case .revealConfiguration:
@@ -215,7 +137,6 @@ final class AppCoordinator {
             }
         }
     }
-
     private func performPrimaryAction(task: String? = nil) {
         if session.snapshot.isActive {
             cancelTakeover()
@@ -224,17 +145,15 @@ final class AppCoordinator {
             requestTask = Task { [weak self] in await self?.startSession(task: task) }
         }
     }
-
     private func startSession(task: String?) async {
         do {
-            let display = try await loadSelectedDisplay()
+            let display = try loadSelectedDisplay()
             if !preferencesStore.takeoverEnabled {
-                let question = Self.normalizedAnswerQuestion(task)
+                let question = AppMetadata.boundedUserText(task)
                 pendingAnswerQuestion = question
                 pet.show(on: nsScreen(for: display.id))
                 await session.answer(
-                    displayID: display.id,
-                    preferences: preferencesStore.assistantPreferences,
+                    displayID: display.id, preferences: preferencesStore.assistantPreferences,
                     question: question
                 )
                 return
@@ -248,42 +167,25 @@ final class AppCoordinator {
             pet.show(on: nsScreen(for: display.id))
             bubble.showWorking(
                 previousMessage: "正在绑定当前前台窗口…",
-                preferences: preferencesStore.assistantPreferences,
-                takeoverEnabled: true,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
+                preferences: preferencesStore.assistantPreferences, takeoverEnabled: true
             )
-            let request = takeoverRequest(displayID: display.id, task: task)
-            settingsTask?.cancel()
+            let request = TakeoverRequest(
+                displayID: display.id, task: AppMetadata.boundedUserText(task),
+                assistantPreferences: preferencesStore.assistantPreferences
+            )
             settings.hide()
             pet.setClickThrough(true)
             pet.show(on: nsScreen(for: request.displayID))
-            await session.start(
-                request,
-                initialMessage: "已绑定当前前台窗口；本轮只使用 Accessibility 和全屏观察。"
-            )
+            await session.start(request,
+                initialMessage: "已绑定当前前台窗口；本轮只使用 Accessibility 和全屏观察。")
         } catch is CancellationError {
             return
         } catch let failure as PetFailure {
-            guard preferencesStore.takeoverEnabled else {
-                showFailure(failure)
-                return
-            }
-            let request = takeoverRequest(
-                displayID: preferencesStore.selectedDisplayID ?? CGMainDisplayID(),
-                task: task
-            )
-            finishTakeover(
-                message: failure.localizedDescription,
-                activity: .failure,
-                failure: failure,
-                request: request
-            )
+            showFailure(failure)
         } catch {
             showFailure(.screenActionFailed)
         }
     }
-
     private func cancelTakeover(message: String = "已由你停止") {
         requestTask?.cancel()
         pet.setClickThrough(false)
@@ -293,109 +195,67 @@ final class AppCoordinator {
             updateMenu()
         }
     }
-
     private func handleSession(_ snapshot: SessionSnapshot) {
-        sessionLog.notice(
-            "mode=\(snapshot.mode.rawValue, privacy: .public) phase=\(String(describing: snapshot.phase), privacy: .public) events=\(snapshot.events.count)"
-        )
         switch snapshot.mode {
         case .idle:
             updateMenu()
-        case .answering, .presentingAnswer:
+        case .answering:
             handleAnswer(snapshot)
         case .takingOver:
             guard let request = snapshot.request else { return }
-            setActivity(snapshot.activity)
-            pet.setClickThrough(true)
-            pet.show(on: nsScreen(for: request.displayID))
-            bubble.showTakeoverProgress(
-                snapshot,
-                preferences: request.assistantPreferences,
-                showsActivityDetails: preferencesStore.showActivityDetails,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
-            )
-            updateMenu()
-        case .presentingTakeover:
-            guard let request = snapshot.request else { return }
-            let failure = snapshot.failure
-            finishTakeover(
-                message: snapshot.message ?? failure?.localizedDescription
-                    ?? "任务已完成。",
-                activity: snapshot.phase == .finished ? .success
-                    : snapshot.phase == .cancelled ? .idle : .failure,
-                failure: failure,
-                request: request
-            )
+            if snapshot.isActive {
+                setActivity(snapshot.activity)
+                pet.setClickThrough(true)
+                pet.show(on: nsScreen(for: request.displayID))
+                bubble.showTakeoverProgress(
+                    snapshot, preferences: request.assistantPreferences,
+                    showsActivityDetails: preferencesStore.showActivityDetails)
+                updateMenu()
+            } else {
+                finishTakeover(
+                    message: snapshot.message ?? "任务已完成。", activity: snapshot.activity,
+                    request: request, events: snapshot.events)
+            }
         }
     }
-
     private func handleAnswer(_ snapshot: SessionSnapshot) {
         let preferences = preferencesStore.assistantPreferences
         setActivity(snapshot.activity)
-        switch snapshot.phase {
-        case .capturing:
+        switch snapshot.activity {
+        case .observing:
             answerHistoryIndex = nil
             bubble.hide()
-        case .deciding:
+        case .thinking:
             answerHistoryIndex = nil
             bubble.showWorking(
-                previousMessage: snapshot.message,
-                preferences: preferences,
-                takeoverEnabled: false,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
-            )
-        case .finished:
+                previousMessage: snapshot.message, preferences: preferences,
+                takeoverEnabled: false)
+        case .success:
             if let message = snapshot.message {
-                recordAnswer(message, preferences: preferences)
+                recordAnswer(message)
             }
-        case .error:
+        case .failure:
             pendingAnswerQuestion = nil
-            showFailure(
-                snapshot.failure ?? .invalidCodexOutput,
-                preferences: preferences
-            )
-        case .idle, .locating, .executing, .verifying, .cancelled:
+            showError(snapshot.message ?? PetFailure.invalidCodexOutput.localizedDescription)
+        case .idle, .locating, .acting, .verifying:
             break
         }
     }
-
-    private func recordAnswer(
-        _ message: String,
-        preferences: AssistantPreferences
-    ) {
-        let entry = AnswerHistoryEntry(
-            question: pendingAnswerQuestion,
-            answer: message
-        )
-        answerHistory.append(entry)
-        answerHistory = Array(
-            answerHistory.suffix(
-                preferencesStore.conversationHistoryTurns
-            )
-        )
-        preferencesStore.answerHistory = answerHistory
-        let latestIndex = answerHistory.count - 1
+    private func recordAnswer(_ message: String) {
+        let entry = AnswerHistoryEntry(question: pendingAnswerQuestion, answer: message)
+        var history = preferencesStore.answerHistory
+        history.append(entry)
+        preferencesStore.answerHistory = history
+        history = preferencesStore.answerHistory
+        let latestIndex = history.count - 1
         answerHistoryIndex = latestIndex
         pendingAnswerQuestion = nil
-        showAnswerHistoryEntry(
-            at: latestIndex,
-            preferences: preferences
-        )
+        showAnswerHistoryEntry(at: latestIndex)
     }
-
-    private func showPreviousAnswer() {
-        showAnswerHistory(offset: -1)
-    }
-
-    private func showNextAnswer() {
-        showAnswerHistory(offset: 1)
-    }
-
     private func showAnswerHistory(offset: Int) {
+        let history = preferencesStore.answerHistory
         guard !session.snapshot.isActive,
-              let lastIndex = answerHistory.indices.last
+              let lastIndex = history.indices.last
         else {
             return
         }
@@ -406,34 +266,23 @@ final class AppCoordinator {
             target = lastIndex
         }
         answerHistoryIndex = target
-        showAnswerHistoryEntry(
-            at: target,
-            preferences: preferencesStore.assistantPreferences
-        )
+        showAnswerHistoryEntry(at: target)
     }
-
-    private func showAnswerHistoryEntry(
-        at index: Int,
-        preferences: AssistantPreferences
-    ) {
-        guard answerHistory.indices.contains(index) else { return }
-        let entry = answerHistory[index]
+    private func showAnswerHistoryEntry(at index: Int) {
+        let history = preferencesStore.answerHistory
+        guard history.indices.contains(index) else { return }
+        let entry = history[index]
         if !pet.panel.isVisible {
             pet.show(on: selectedNSScreen())
             updateMenu()
         }
         bubble.showAnswer(
-            entry.answer,
-            question: entry.question,
-            historyPosition: (index + 1, answerHistory.count),
-            preferences: preferences,
-            petFrame: pet.panel.frame,
-            screen: pet.panel.screen
-        )
+            entry.answer, question: entry.question,
+            historyPosition: (index + 1, history.count),
+            preferences: preferencesStore.assistantPreferences)
     }
-
     private func submitFollowUp(_ question: String) {
-        guard let question = Self.normalizedAnswerQuestion(question) else {
+        guard let question = AppMetadata.boundedUserText(question) else {
             return
         }
         guard session.canFollowUp else {
@@ -446,7 +295,6 @@ final class AppCoordinator {
             await self?.session.followUp(question)
         }
     }
-
     private func showComposer(initialText: String = "") {
         answerHistoryIndex = nil
         if !pet.panel.isVisible {
@@ -454,56 +302,33 @@ final class AppCoordinator {
             updateMenu()
         }
         if preferencesStore.takeoverEnabled {
-            bubble.showTakeoverComposer(
-                initialTask: initialText,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
-            )
+            bubble.showTakeoverComposer(initialTask: initialText)
         } else {
-            bubble.showQuestionComposer(
-                initialQuestion: initialText,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
-            )
+            bubble.showQuestionComposer(initialQuestion: initialText)
         }
     }
-
     private func changeMode(
         _ takeoverEnabled: Bool,
         preserving text: String
     ) {
-        if session.snapshot.isTakingOver {
-            guard !takeoverEnabled else { return }
-            preferencesStore.takeoverEnabled = false
-            updateMenu()
-            cancelTakeover(message: "已关闭接管")
-            showComposer(initialText: text)
-            return
-        }
+        guard !session.snapshot.isTakingOver || !takeoverEnabled else { return }
         preferencesStore.takeoverEnabled = takeoverEnabled
         updateMenu()
+        if session.snapshot.isTakingOver { cancelTakeover(message: "已关闭接管") }
         showComposer(initialText: text)
     }
-
     private func closeBubble() {
         if session.snapshot.isTakingOver {
             cancelTakeover()
             return
         }
-        requestTask?.cancel()
-        session.closeAnswer()
-        pendingAnswerQuestion = nil
-        answerHistoryIndex = nil
+        clearAnswer()
         bubble.hide()
     }
-
     private func togglePet() {
         guard !session.snapshot.isActive else { return }
         if pet.panel.isVisible {
-            requestTask?.cancel()
-            session.closeAnswer()
-            pendingAnswerQuestion = nil
-            answerHistoryIndex = nil
+            clearAnswer()
             bubble.hide()
             pet.hide()
         } else {
@@ -511,15 +336,14 @@ final class AppCoordinator {
         }
         updateMenu()
     }
-
-    private func setActivity(
-        _ activity: PetActivity,
-        playsSound: Bool = true
-    ) {
-        pet.jellyView.apply(activity: activity)
-        guard activity != lastActivity else { return }
-        lastActivity = activity
-        guard playsSound else { return }
+    private func clearAnswer() {
+        requestTask?.cancel()
+        session.closeAnswer()
+        pendingAnswerQuestion = nil
+        answerHistoryIndex = nil
+    }
+    private func setActivity(_ activity: PetActivity) {
+        guard pet.jellyView.apply(activity: activity) else { return }
         let cue: SoundCue? = switch activity {
         case .observing: .capture
         case .thinking, .locating, .acting, .verifying: .thinking
@@ -529,107 +353,44 @@ final class AppCoordinator {
         }
         if let cue { soundPlayer.play(cue) }
     }
-
     private func finishTakeover(
         message: String,
         activity: PetActivity,
-        failure: PetFailure? = nil,
-        request: TakeoverRequest
+        request: TakeoverRequest,
+        events: [ActivityEvent]
     ) {
         requestTask = nil
         pet.setClickThrough(false)
         setActivity(activity)
         answerHistoryIndex = nil
 
-        if failure != nil {
-            pet.show(
-                on: nsScreen(for: request.displayID) ?? selectedNSScreen()
-            )
-            bubble.showTakeoverResult(
-                message,
-                events: session.snapshot.events,
-                isError: true,
-                preferences: request.assistantPreferences,
-                showsActivityDetails: preferencesStore.showActivityDetails,
-                petFrame: pet.panel.frame,
-                screen: pet.panel.screen
-            )
-            pet.jellyView.showAttention()
-            updateMenu()
-            return
-        }
         pet.show(
             on: nsScreen(for: request.displayID) ?? selectedNSScreen()
         )
         bubble.showTakeoverResult(
             message,
-            events: session.snapshot.events,
+            events: events,
             isError: activity == .failure,
             preferences: request.assistantPreferences,
-            showsActivityDetails: preferencesStore.showActivityDetails,
-            petFrame: pet.panel.frame,
-            screen: pet.panel.screen
+            showsActivityDetails: preferencesStore.showActivityDetails
         )
         updateMenu()
     }
-
-    private func takeoverRequest(
-        displayID: UInt32,
-        task: String?
-    ) -> TakeoverRequest {
-        let task = task?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        let boundedTask = task.flatMap {
-            $0.isEmpty ? nil : String($0.prefix(4_000))
-        }
-        return TakeoverRequest(
-            displayID: displayID,
-            task: boundedTask,
-            assistantPreferences: preferencesStore.assistantPreferences
-        )
+    private func showFailure(_ failure: PetFailure) {
+        showError(failure.localizedDescription)
     }
-
-    private static func normalizedAnswerQuestion(
-        _ question: String?
-    ) -> String? {
-        let value = String(
-            (question ?? "").trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ).prefix(4_000)
-        )
-        return value.isEmpty ? nil : value
-    }
-
-    private func showFailure(
-        _ failure: PetFailure,
-        message: String? = nil,
-        preferences: AssistantPreferences? = nil
-    ) {
+    private func showError(_ message: String) {
         setActivity(.failure)
         answerHistoryIndex = nil
         pet.show(on: selectedNSScreen())
 
         bubble.showError(
-            message ?? failure.localizedDescription,
-            preferences: preferences,
-            takeoverEnabled: preferencesStore.takeoverEnabled,
-            petFrame: pet.panel.frame,
-            screen: pet.panel.screen
-        )
+            message, preferences: preferencesStore.assistantPreferences,
+            takeoverEnabled: preferencesStore.takeoverEnabled)
         updateMenu()
     }
-
-    private func loadSelectedDisplay() async throws -> DisplayDescriptor {
-        let displays: [DisplayDescriptor]
-        do {
-            displays = try await screenBackend.availableDisplays()
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw PetFailure.captureFailed
-        }
-
+    private func loadSelectedDisplay() throws -> DisplayDescriptor {
+        let displays = screen.availableDisplays()
         guard !displays.isEmpty else {
             throw PetFailure.noDisplaysAvailable
         }
@@ -640,52 +401,14 @@ final class AppCoordinator {
         preferencesStore.selectedDisplayID = display.id
         return display
     }
-
-    private func repositionBubble() {
-        bubble.reposition(
-            petFrame: pet.panel.frame,
-            screen: pet.panel.screen
-        )
-    }
-
     private func refreshCurrentSettings(
         showWindow: Bool = false
     ) {
-        if showWindow {
-            settings.show()
-        }
-        scheduleSettingsTask { coordinator in
-            await coordinator.refreshSettings(showWindow: false)
-        }
-    }
-
-    private func scheduleSettingsTask(
-        _ operation: @escaping @MainActor (AppCoordinator) async -> Void
-    ) {
-        settingsTask?.cancel()
-        settingsTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            await operation(self)
-        }
-    }
-
-    private func refreshSettings(
-        showWindow: Bool
-    ) async {
+        if showWindow { settings.show() }
         _ = preferencesStore.reloadConfiguration()
-        bubble.setTakeoverShortcutLabel(
-            preferencesStore.globalShortcut.label
-        )
+        bubble.setTakeoverShortcutLabel(preferencesStore.globalShortcut.label)
         applyConfiguredSprite()
-        answerHistory = Array(
-            answerHistory.suffix(
-                preferencesStore.conversationHistoryTurns
-            )
-        )
-        preferencesStore.answerHistory = answerHistory
-        let displays = (try? await screenBackend.availableDisplays()) ?? []
+        let displays = screen.availableDisplays()
         if preferencesStore.selectedDisplayID == nil,
            let display = displays.first(where: \.isPrimary) ?? displays.first {
             preferencesStore.selectedDisplayID = display.id
@@ -694,9 +417,6 @@ final class AppCoordinator {
         let codexStatusText = codexExecutableURL.map {
             "已连接 Codex · \($0.path)"
         } ?? "未找到 Codex CLI，请先安装并登录 Codex"
-        guard !Task.isCancelled else {
-            return
-        }
         let spriteSheetURL = preferencesStore.spriteSheetURL
         let configurationError = preferencesStore.configurationError
         settings.update(
@@ -718,11 +438,7 @@ final class AppCoordinator {
                 spriteSheetURL: spriteSheetURL
             )
         )
-        if showWindow {
-            settings.show()
-        }
     }
-
     private func updateMenu() {
         let snapshot = session.snapshot
         let isTakingOver = snapshot.isTakingOver
@@ -736,152 +452,117 @@ final class AppCoordinator {
             shortcutLabel: preferencesStore.globalShortcut.label
         )
     }
-
+    private func installHotkeys() {
+        let registrations: [(() throws -> Void, PetFailure)] = [
+            ({ try self.registerHotkey(self.preferencesStore.globalShortcut) }, .shortcutUnavailable),
+            ({ try self.registerAnswerScrollHotkeys(self.preferencesStore.answerScrollShortcut) }, .answerScrollShortcutUnavailable),
+            ({ try self.registerAnswerHistoryHotkeys(self.preferencesStore.answerHistoryShortcut) }, .answerHistoryShortcutUnavailable)
+        ]
+        for (register, failure) in registrations {
+            do { try register() } catch { showFailure(failure) }
+        }
+    }
     private func registerHotkey(_ shortcut: GlobalShortcut) throws {
         try hotkey.register(shortcut: shortcut) { [weak self] in
-            Task { @MainActor in self?.performPrimaryAction() }
+            self?.performPrimaryAction()
         }
     }
-
-    private func registerAnswerScrollHotkeys(
-        _ shortcut: AnswerScrollShortcut
-    ) throws {
+    private func registerAnswerScrollHotkeys(_ shortcut: ArrowShortcut) throws {
         try hotkey.registerAnswerScrolling(
             shortcut: shortcut,
-            onUp: { [weak self] in
-                Task { @MainActor in self?.bubble.scrollAnswerUp() }
-            },
-            onDown: { [weak self] in
-                Task { @MainActor in self?.bubble.scrollAnswerDown() }
-            }
+            onUp: { [weak self] in _ = self?.bubble.scrollAnswerUp() },
+            onDown: { [weak self] in _ = self?.bubble.scrollAnswerDown() }
         )
     }
-
-    private func registerAnswerHistoryHotkeys(
-        _ shortcut: AnswerHistoryShortcut
-    ) throws {
+    private func registerAnswerHistoryHotkeys(_ shortcut: ArrowShortcut) throws {
         try hotkey.registerAnswerHistoryNavigation(
             shortcut: shortcut,
-            onPrevious: { [weak self] in
-                Task { @MainActor in self?.showPreviousAnswer() }
-            },
-            onNext: { [weak self] in
-                Task { @MainActor in self?.showNextAnswer() }
-            }
+            onPrevious: { [weak self] in self?.showAnswerHistory(offset: -1) },
+            onNext: { [weak self] in self?.showAnswerHistory(offset: 1) }
         )
     }
-
     private func changeShortcut(_ shortcut: GlobalShortcut) {
-        let previous = preferencesStore.globalShortcut
-        do {
-            try registerHotkey(shortcut)
-            preferencesStore.globalShortcut = shortcut
+        replaceShortcut(
+            shortcut, previous: preferencesStore.globalShortcut, register: registerHotkey,
+            save: { preferencesStore.globalShortcut = $0 },
+            failure: .shortcutUnavailable
+        ) {
             bubble.setTakeoverShortcutLabel(shortcut.label)
-            refreshCurrentSettings(); updateMenu()
-        } catch {
-            try? registerHotkey(previous)
-            showFailure(.shortcutUnavailable); refreshCurrentSettings()
+            updateMenu()
         }
     }
-
-    private func changeAnswerScrollShortcut(
-        _ shortcut: AnswerScrollShortcut
+    private func changeAnswerScrollShortcut(_ shortcut: ArrowShortcut) {
+        replaceShortcut(
+            shortcut, previous: preferencesStore.answerScrollShortcut,
+            register: registerAnswerScrollHotkeys,
+            save: { preferencesStore.answerScrollShortcut = $0 },
+            failure: .answerScrollShortcutUnavailable
+        )
+    }
+    private func changeAnswerHistoryShortcut(_ shortcut: ArrowShortcut) {
+        replaceShortcut(
+            shortcut, previous: preferencesStore.answerHistoryShortcut,
+            register: registerAnswerHistoryHotkeys,
+            save: { preferencesStore.answerHistoryShortcut = $0 },
+            failure: .answerHistoryShortcutUnavailable
+        )
+    }
+    private func replaceShortcut<Value>(
+        _ value: Value,
+        previous: Value,
+        register: (Value) throws -> Void,
+        save: (Value) -> Void,
+        failure: PetFailure,
+        afterSave: () -> Void = {}
     ) {
-        let previous = preferencesStore.answerScrollShortcut
         do {
-            try registerAnswerScrollHotkeys(shortcut)
-            preferencesStore.answerScrollShortcut = shortcut
-            refreshCurrentSettings()
+            try register(value)
+            save(value)
+            afterSave()
         } catch {
-            try? registerAnswerScrollHotkeys(previous)
-            showFailure(.answerScrollShortcutUnavailable)
-            refreshCurrentSettings()
+            try? register(previous)
+            showFailure(failure)
         }
     }
-
-    private func changeAnswerHistoryShortcut(
-        _ shortcut: AnswerHistoryShortcut
-    ) {
-        let previous = preferencesStore.answerHistoryShortcut
-        do {
-            try registerAnswerHistoryHotkeys(shortcut)
-            preferencesStore.answerHistoryShortcut = shortcut
-            refreshCurrentSettings()
-        } catch {
-            try? registerAnswerHistoryHotkeys(previous)
-            showFailure(.answerHistoryShortcutUnavailable)
-            refreshCurrentSettings()
-        }
-    }
-
-    private func chooseSpriteSheet() {
+    private func chooseSpriteSheet() async {
         let panel = NSOpenPanel()
         panel.title = "选择 8×8 宠物精灵图"
         panel.message = "请选择正方形 PNG：8 行状态，每行 8 帧动画。"
         panel.allowedContentTypes = [.png]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.beginSheetModal(for: settings.window) { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                do {
-                    try self.preferencesStore.importSpriteSheet(from: url)
-                    self.applyConfiguredSprite()
-                    self.refreshCurrentSettings()
-                } catch {
-                    self.showSettingsError(
-                        title: "无法使用这张精灵图",
-                        message: error.localizedDescription
-                    )
-                }
-            }
+        guard await panel.beginSheetModal(for: settings.window) == .OK,
+              let url = panel.url else { return }
+        do {
+            try preferencesStore.importSpriteSheet(from: url)
+            applyConfiguredSprite()
+            refreshCurrentSettings()
+        } catch {
+            showSettingsError("无法使用这张精灵图", error)
         }
     }
-
     private func resetSpriteSheet() {
         do {
             try preferencesStore.resetSpriteSheet()
             try pet.jellyView.setSpriteSheet(at: nil)
             refreshCurrentSettings()
         } catch {
-            showSettingsError(
-                title: "无法恢复默认外形",
-                message: error.localizedDescription
-            )
+            showSettingsError("无法恢复默认外形", error)
         }
     }
-
     private func applyConfiguredSprite() {
-        do {
-            try pet.jellyView.setSpriteSheet(
-                at: preferencesStore.spriteSheetURL
-            )
-        } catch {
-            try? pet.jellyView.setSpriteSheet(at: nil)
-        }
+        try? pet.jellyView.setSpriteSheet(at: preferencesStore.spriteSheetURL)
     }
-
-    private func showSettingsError(title: String, message: String) {
+    private func showSettingsError(_ title: String, _ error: Error) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
-        alert.informativeText = message
-        if settings.window.isVisible {
-            alert.beginSheetModal(for: settings.window)
-        } else {
-            alert.runModal()
-        }
+        alert.informativeText = error.localizedDescription
+        alert.beginSheetModal(for: settings.window)
     }
-
     private func selectedNSScreen() -> NSScreen? {
-        if let id = preferencesStore.selectedDisplayID,
-           let screen = nsScreen(for: id) {
-            return screen
-        }
-        return NSScreen.main
+        preferencesStore.selectedDisplayID.flatMap { nsScreen(for: $0) } ?? NSScreen.main
     }
-
     private func nsScreen(for id: UInt32) -> NSScreen? {
         NSScreen.screens.first { screen in
             let key = NSDeviceDescriptionKey("NSScreenNumber")
@@ -889,7 +570,10 @@ final class AppCoordinator {
                 .uint32Value == id
         }
     }
-
+    private static func packagedResource(_ path: String) -> URL? {
+        let url = Bundle.main.resourceURL?.appendingPathComponent(path)
+        return url.flatMap { FileManager.default.isReadableFile(atPath: $0.path) ? $0 : nil }
+    }
     private static func soundResourceDirectory() -> URL {
         if let resourceURL = Bundle.main.resourceURL {
             let bundled = resourceURL.appendingPathComponent(

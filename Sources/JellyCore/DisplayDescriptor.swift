@@ -4,7 +4,6 @@ public struct DisplayDescriptor: Equatable, Sendable {
     public let width: Int
     public let height: Int
     public let isPrimary: Bool
-
     public init(
         id: UInt32,
         name: String,

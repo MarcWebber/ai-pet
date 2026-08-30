@@ -5,7 +5,6 @@ public enum ReasoningEffort: String, CaseIterable, Codable, Sendable {
     case medium
     case high
     case xhigh
-
     public var displayName: String {
         rawValue.capitalized
     }
@@ -17,15 +16,12 @@ public struct AssistantPreferences: Equatable, Sendable {
         model: defaultModel,
         reasoningEffort: .high,
         customInstructions: "",
-        conversationHistoryTurns:
-            JellyConfiguration.Conversation(historyTurns: 8).historyTurns
+        conversationHistoryTurns: 8
     )
-
     public let model: String
     public let reasoningEffort: ReasoningEffort
     public let customInstructions: String
     public let conversationHistoryTurns: Int
-
     public init(
         model: String,
         reasoningEffort: ReasoningEffort,
@@ -47,7 +43,6 @@ public struct AssistantPreferences: Equatable, Sendable {
             JellyConfiguration.Conversation.maximumHistoryTurns
         )
     }
-
     public var compactLabel: String {
         let modelLabel = model == Self.defaultModel ? "默认模型" : model
         return "Codex · \(modelLabel) · \(reasoningEffort.displayName)"

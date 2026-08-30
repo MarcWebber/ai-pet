@@ -6,167 +6,93 @@ public final class CodexClient: CodexServing {
         "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol",
         "gpt-5.5", "gpt-5.4"
     ]
-
     private let engine: CodexEngine?
-
     public init(
         executableURL: URL?,
         skillURL: URL?,
         temporaryRoot: URL = FileManager.default.temporaryDirectory
     ) {
+        Self.removeStaleDirectories(in: temporaryRoot)
         guard let executableURL, let skillURL,
-              FileManager.default.isReadableFile(atPath: skillURL.path) else {
+              let instructions = try? String(contentsOf: skillURL, encoding: .utf8) else {
             engine = nil
             return
         }
         engine = CodexEngine(
             executableURL: executableURL,
-            skillURL: skillURL,
+            takeoverInstructions: String(instructions.prefix(20_000)),
             workingDirectory: temporaryRoot.appendingPathComponent(
                 "JellyPet-Codex-\(UUID().uuidString)",
                 isDirectory: true
             )
         )
     }
-
+    private static func removeStaleDirectories(in root: URL) {
+        let files = FileManager.default
+        let cutoff = Date().addingTimeInterval(-3_600)
+        let urls = (try? files.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.contentModificationDateKey]
+        )) ?? []
+        for url in urls where url.lastPathComponent.hasPrefix("JellyPet-Codex-") {
+            let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            if modified.map({ $0 < cutoff }) == true { try? files.removeItem(at: url) }
+        }
+    }
     public func respond(
         to request: CodexRequest,
-        onTextDelta: @escaping @Sendable (String) -> Void,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
         guard let engine else { throw PetFailure.codexUnavailable }
-        do {
-            return try await withTaskCancellationHandler {
-                try await engine.respond(
-                    request,
-                    onTextDelta: onTextDelta,
-                    screenToolHandler: screenToolHandler
-                )
-            } onCancel: {
-                Task { await engine.cancel() }
-            }
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let failure as PetFailure {
-            throw failure
-        } catch {
-            throw PetFailure.codexFailed(error.localizedDescription)
+        return try await withTaskCancellationHandler {
+            try await engine.respond(request, screenToolHandler: screenToolHandler)
+        } onCancel: {
+            Task { await engine.cancel() }
         }
     }
-
     public func steer(_ instruction: String) async throws {
         guard let engine else { throw PetFailure.codexUnavailable }
-        do { try await engine.steer(instruction) }
-        catch { throw PetFailure.codexFailed(error.localizedDescription) }
+        try await engine.steer(instruction)
     }
-
-    public func prepareForNextTurn() async {
-        await engine?.prepareForNextTurn()
+    public func prepare(resetHistory: Bool) async {
+        await engine?.prepare(resetHistory: resetHistory)
     }
-
-    public func resetSession() async {
-        await engine?.resetSession()
-    }
-
     public func cancel() {
         if let engine { Task { await engine.cancel() } }
     }
 }
 
-private enum CodexEngineError: LocalizedError {
-    case disconnected(String?)
-    case invalidResponse
-    case server(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .disconnected(message): message ?? "Codex app-server 已断开。"
-        case .invalidResponse: "Codex app-server 返回了无效响应。"
-        case let .server(message): message
-        }
-    }
-}
-
-private final class StderrBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = ""
-
-    func clear() { lock.withLock { value = "" } }
-
-    func append(_ data: Data) {
-        guard !data.isEmpty else { return }
-        lock.withLock {
-            value = String((value + String(decoding: data, as: UTF8.self)).suffix(8_000))
-        }
-    }
-
-    func message() -> String? {
-        lock.withLock {
-            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
-        }
-    }
-}
-
 private actor CodexEngine {
-    typealias DeltaHandler = @Sendable (String) -> Void
-
-    private struct ThreadConfiguration: Equatable {
-        let model: String
-        let reasoning: String
-        let tools: Bool
-        let historyTurns: Int
-    }
-
-    private enum TurnOutcome {
-        case waiting
-        case finished(String)
-        case failed(Error)
-    }
-
     private let executableURL: URL
-    private let sourceSkillURL: URL
+    private let takeoverInstructions: String
     private let workingDirectory: URL
-    private let stderr = StderrBuffer()
     private var process: Process?
     private var stdin: FileHandle?
     private var stdout: FileHandle?
-    private var stderrHandle: FileHandle?
     private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
     private var iterator: AsyncThrowingStream<Data, Error>.Iterator?
     private var outputBuffer = Data()
     private var requestID = 0
-    private var initialized = false
     private var responseInFlight = false
     private var cancelRequested = false
     private var threadID: String?
-    private var threadConfiguration: ThreadConfiguration?
     private var activeTurnID: String?
-    private var skillPath: String?
-    private var skillPending = true
-    private var bufferedEvents: [String: [[String: Any]]] = [:]
-    private var completedTurns = 0
     private var history: [String] = []
-
-    init(executableURL: URL, skillURL: URL, workingDirectory: URL) {
+    init(executableURL: URL, takeoverInstructions: String, workingDirectory: URL) {
         self.executableURL = executableURL
-        sourceSkillURL = skillURL
+        self.takeoverInstructions = takeoverInstructions
         self.workingDirectory = workingDirectory
     }
-
     deinit {
         stdout?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
         if process?.isRunning == true { process?.terminate() }
         try? FileManager.default.removeItem(at: workingDirectory)
     }
-
     func respond(
         _ request: CodexRequest,
-        onTextDelta: @escaping DeltaHandler,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
-        guard !responseInFlight else { throw CodexEngineError.invalidResponse }
+        guard !responseInFlight else { throw PetFailure.invalidCodexOutput }
         responseInFlight = true
         cancelRequested = false
         defer {
@@ -175,46 +101,31 @@ private actor CodexEngine {
         }
 
         try await prepare()
-        let configuration = ThreadConfiguration(
-            model: request.model,
-            reasoning: request.reasoningEffort.rawValue,
-            tools: screenToolHandler != nil,
-            historyTurns: request.conversationHistoryTurns
+        pruneHistory(request.preferences.conversationHistoryTurns)
+        discardThread()
+        let threadID = try await startThread(
+            preferences: request.preferences,
+            tools: screenToolHandler != nil
         )
-        pruneHistory(request.conversationHistoryTurns)
-        let startsNewThread = configuration != threadConfiguration
-            || completedTurns >= request.conversationHistoryTurns
-        if startsNewThread {
-            discardThread()
-            completedTurns = 0
-        }
-        let threadID = try await ensureThread(configuration)
         try Task.checkCancellation()
         guard !cancelRequested else { throw CancellationError() }
 
         var prompt = request.prompt
-        if startsNewThread, !history.isEmpty {
+        if !history.isEmpty {
             prompt = "此前最近对话（仅作上下文）：\n\(history.joined(separator: "\n\n"))\n\n当前请求：\n\(prompt)"
         }
         let imageURL = try writeImage(request.imagePNG)
         defer { if let imageURL { try? FileManager.default.removeItem(at: imageURL) } }
-        let attachedSkill = screenToolHandler != nil && skillPending
-            ? skillPath : nil
-        if screenToolHandler != nil, attachedSkill == nil {
-            throw CodexEngineError.invalidResponse
-        }
         let result = try await rpc("turn/start", [
             "threadId": threadID,
             "input": Self.turnInput(
                 prompt: prompt,
-                imageURL: imageURL,
-                skillPath: attachedSkill
+                imageURL: imageURL
             )
         ])
-        if attachedSkill != nil { skillPending = false }
         guard let turn = result["turn"] as? [String: Any],
               let turnID = turn["id"] as? String,
-              !turnID.isEmpty else { throw CodexEngineError.invalidResponse }
+              !turnID.isEmpty else { throw PetFailure.invalidCodexOutput }
         activeTurnID = turnID
         if cancelRequested || Task.isCancelled {
             interrupt(threadID, turnID)
@@ -222,20 +133,16 @@ private actor CodexEngine {
         }
         let answer = try await waitForTurn(
             turnID,
-            onTextDelta: onTextDelta,
             screenToolHandler: screenToolHandler
         )
-        completedTurns += 1
-        history.append("用户：\(String(request.prompt.prefix(8_000)))")
-        history.append("助手：\(String(answer.prefix(8_000)))")
-        pruneHistory(request.conversationHistoryTurns)
+        history.append("用户：\(String(request.prompt.prefix(8_000)))\n助手：\(String(answer.prefix(8_000)))")
+        pruneHistory(request.preferences.conversationHistoryTurns)
         return answer
     }
-
     func steer(_ instruction: String) throws {
         let text = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
         guard responseInFlight, let threadID, let activeTurnID,
-              !text.isEmpty else { throw CodexEngineError.invalidResponse }
+              !text.isEmpty else { throw PetFailure.invalidCodexOutput }
         requestID += 1
         try send([
             "id": requestID,
@@ -247,24 +154,14 @@ private actor CodexEngine {
             ]
         ])
     }
-
     func cancel() { cancelRequested = true; interruptActiveTurn() }
-
-    func prepareForNextTurn() async {
+    func prepare(resetHistory: Bool) async {
         await finishCurrentTurn()
         cancelRequested = false
+        if resetHistory { history.removeAll() }
     }
-
-    func resetSession() async {
-        await finishCurrentTurn()
-        discardThread()
-        history.removeAll()
-        completedTurns = 0
-        cancelRequested = false
-    }
-
     private func prepare() async throws {
-        guard !initialized || process?.isRunning != true else { return }
+        guard process?.isRunning != true else { return }
         stop()
         try launch()
         _ = try await rpc("initialize", [
@@ -272,102 +169,50 @@ private actor CodexEngine {
             "capabilities": ["experimentalApi": true]
         ])
         try send(["method": "initialized"])
-        try await discoverSkill()
-        initialized = true
     }
-
-    private func discoverSkill() async throws {
-        let result = try await rpc("skills/list", [
-            "cwds": [workingDirectory.path],
-            "forceReload": true
-        ])
-        let expected = sourceSkillURL.resolvingSymlinksInPath()
-            .standardizedFileURL.path
-        guard let groups = result["data"] as? [[String: Any]] else {
-            throw CodexEngineError.invalidResponse
-        }
-        for group in groups {
-            for skill in group["skills"] as? [[String: Any]] ?? [] {
-                if skill["name"] as? String == "jellypet-takeover",
-                   skill["enabled"] as? Bool == true,
-                   let path = skill["path"] as? String,
-                   URL(fileURLWithPath: path).resolvingSymlinksInPath()
-                    .standardizedFileURL.path == expected {
-                    skillPath = path
-                    return
-                }
-            }
-        }
-        throw CodexEngineError.invalidResponse
-    }
-
-    private func ensureThread(_ configuration: ThreadConfiguration) async throws -> String {
-        if let threadID, threadConfiguration == configuration { return threadID }
-        discardThread()
+    private func startThread(
+        preferences: AssistantPreferences,
+        tools: Bool
+    ) async throws -> String {
         var params: [String: Any] = [
             "cwd": workingDirectory.path,
             "approvalPolicy": "never",
             "sandbox": "danger-full-access",
             "ephemeral": false,
-            "baseInstructions": configuration.tools
-                ? "你是 JellyPet 的屏幕操作 Agent。用户任务已经授权本轮界面修改。只使用 jellypet 动态工具观察和操作，根据每次真实结果继续；不要设置审批、只读或额外确认门槛，不得使用 Shell 或文件工具。"
+            "baseInstructions": tools
+                ? "你是 JellyPet 的屏幕操作 Agent。用户任务已经授权本轮界面修改。只使用 jellypet 动态工具观察和操作，根据每次真实结果继续；不要设置审批、只读或额外确认门槛，不得使用 Shell 或文件工具。\n\n\(takeoverInstructions)"
                 : "你是 JellyPet 的屏幕问答助手。只回答问题，不操作界面或外部状态。",
-            "config": ["model_reasoning_effort": configuration.reasoning]
+            "config": ["model_reasoning_effort": preferences.reasoningEffort.rawValue]
         ]
-        if configuration.model != AssistantPreferences.defaultModel {
-            params["model"] = configuration.model
+        if preferences.model != AssistantPreferences.defaultModel {
+            params["model"] = preferences.model
         }
-        if configuration.tools { params["dynamicTools"] = Self.dynamicTools }
+        if tools { params["dynamicTools"] = Self.dynamicTools }
         let result = try await rpc("thread/start", params)
         guard let thread = result["thread"] as? [String: Any],
               let value = thread["id"] as? String,
-              !value.isEmpty else { throw CodexEngineError.invalidResponse }
+              !value.isEmpty else { throw PetFailure.invalidCodexOutput }
         threadID = value
-        threadConfiguration = configuration
-        skillPending = true
         return value
     }
-
     private func waitForTurn(
         _ turnID: String,
-        onTextDelta: @escaping DeltaHandler,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
         var text = ""
-        var pendingDelta = ""
-        var lastEmission = Date.distantPast
-        func emit(_ force: Bool = false) {
-            guard !pendingDelta.isEmpty,
-                  force || Date().timeIntervalSince(lastEmission) >= 0.25 else { return }
-            onTextDelta(pendingDelta)
-            pendingDelta = ""
-            lastEmission = Date()
-        }
-        var queue = bufferedEvents.removeValue(forKey: turnID) ?? []
         while true {
             try Task.checkCancellation()
-            let message = queue.isEmpty ? try await nextMessage() : queue.removeFirst()
+            let message = try await nextMessage()
             if try await handleToolCall(
                 message,
                 turnID: turnID,
                 handler: screenToolHandler
             ) { continue }
-            switch consume(message, turnID: turnID, text: &text) {
-            case .waiting:
-                if let params = message["params"] as? [String: Any],
-                   message["method"] as? String == "item/agentMessage/delta",
-                   let delta = params["delta"] as? String {
-                    pendingDelta += delta
-                    emit()
-                }
-            case let .finished(answer):
-                emit(true)
+            if let answer = try consume(message, turnID: turnID, text: &text) {
                 return answer
-            case let .failed(error): throw error
             }
         }
     }
-
     private func handleToolCall(
         _ message: [String: Any],
         turnID: String,
@@ -376,11 +221,11 @@ private actor CodexEngine {
         guard message["method"] as? String == "item/tool/call",
               let params = message["params"] as? [String: Any],
               params["turnId"] as? String == turnID else { return false }
-        guard let id = message["id"] else { throw CodexEngineError.invalidResponse }
+        guard let id = message["id"] else { throw PetFailure.invalidCodexOutput }
         let result: ScreenToolResult
         do {
             guard let handler else {
-                throw CodexEngineError.server("当前会话没有启用屏幕工具。")
+                throw PetFailure.codexFailed("当前会话没有启用屏幕工具。")
             }
             result = await handler(try Self.decodeTool(params))
         } catch {
@@ -389,37 +234,36 @@ private actor CodexEngine {
         try send(["id": id, "result": Self.toolResponse(result)])
         return true
     }
-
     private func consume(
         _ message: [String: Any],
         turnID: String,
         text: inout String
-    ) -> TurnOutcome {
+    ) throws -> String? {
         guard let method = message["method"] as? String,
-              let params = message["params"] as? [String: Any] else { return .waiting }
+              let params = message["params"] as? [String: Any] else { return nil }
         if method == "error", params["turnId"] as? String == turnID,
            params["willRetry"] as? Bool != true {
-            return .failed(CodexEngineError.server(Self.errorText(params["error"])))
+            throw PetFailure.codexFailed(Self.errorText(params["error"]))
         }
         if method == "item/agentMessage/delta",
            params["turnId"] as? String == turnID,
            let delta = params["delta"] as? String,
            text.utf8.count + delta.utf8.count <= 200_000 {
             text += delta
-            return .waiting
+            return nil
         }
         guard method == "turn/completed",
               let turn = params["turn"] as? [String: Any],
               turn["id"] as? String == turnID,
-              let status = turn["status"] as? String else { return .waiting }
-        if status == "interrupted" { return .failed(CancellationError()) }
+              let status = turn["status"] as? String else { return nil }
+        if status == "interrupted" { throw CancellationError() }
         guard status == "completed" else {
-            return .failed(CodexEngineError.server(Self.errorText(turn["error"])))
+            throw PetFailure.codexFailed(Self.errorText(turn["error"]))
         }
         let answer = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return answer.isEmpty ? .failed(CodexEngineError.invalidResponse) : .finished(answer)
+        guard !answer.isEmpty else { throw PetFailure.invalidCodexOutput }
+        return answer
     }
-
     private func rpc(_ method: String, _ params: [String: Any]) async throws -> [String: Any] {
         requestID += 1
         let id = requestID
@@ -428,29 +272,15 @@ private actor CodexEngine {
             let message = try await nextMessage()
             if Self.integerID(message["id"]) == id, message["method"] == nil {
                 if let error = message["error"] {
-                    throw CodexEngineError.server(Self.errorText(error))
+                    throw PetFailure.codexFailed(Self.errorText(error))
                 }
                 guard let result = message["result"] as? [String: Any] else {
-                    throw CodexEngineError.invalidResponse
+                    throw PetFailure.invalidCodexOutput
                 }
                 return result
             }
-            buffer(message)
         }
     }
-
-    private func buffer(_ message: [String: Any]) {
-        guard let method = message["method"] as? String,
-              ["item/agentMessage/delta", "item/tool/call", "error", "turn/completed"]
-                .contains(method),
-              let params = message["params"] as? [String: Any],
-              let turnID = params["turnId"] as? String
-                ?? (params["turn"] as? [String: Any])?["id"] as? String else { return }
-        if bufferedEvents[turnID, default: []].count < 128 {
-            bufferedEvents[turnID, default: []].append(message)
-        }
-    }
-
     private func launch() throws {
         let files = FileManager.default
         try files.createDirectory(
@@ -458,21 +288,8 @@ private actor CodexEngine {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        let link = workingDirectory
-            .appendingPathComponent(".agents/skills/jellypet-takeover", isDirectory: true)
-        try files.createDirectory(
-            at: link.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        if !files.fileExists(atPath: link.path) {
-            try files.createSymbolicLink(
-                at: link,
-                withDestinationURL: sourceSkillURL.deletingLastPathComponent()
-            )
-        }
         let process = Process()
-        let input = Pipe(), output = Pipe(), errors = Pipe()
+        let input = Pipe(), output = Pipe()
         let stream = AsyncThrowingStream<Data, Error> { self.continuation = $0 }
         process.executableURL = executableURL
         process.arguments = [
@@ -484,37 +301,27 @@ private actor CodexEngine {
         process.currentDirectoryURL = workingDirectory
         process.standardInput = input
         process.standardOutput = output
-        process.standardError = errors
+        process.standardError = FileHandle.nullDevice
         process.environment = launchEnvironment()
-        stderr.clear()
         let continuation = self.continuation
-        let stderr = self.stderr
         output.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if !data.isEmpty { continuation?.yield(data) }
         }
-        errors.fileHandleForReading.readabilityHandler = { handle in
-            stderr.append(handle.availableData)
-        }
         process.terminationHandler = { process in
-            continuation?.finish(throwing: CodexEngineError.disconnected(
-                stderr.message() ?? "Codex 提前退出（\(process.terminationStatus)）。"
-            ))
+            continuation?.finish(throwing: PetFailure.codexFailed("Codex app-server 已断开。"))
         }
         do { try process.run() }
         catch {
             output.fileHandleForReading.readabilityHandler = nil
-            errors.fileHandleForReading.readabilityHandler = nil
             process.terminationHandler = nil
-            throw CodexEngineError.disconnected(error.localizedDescription)
+            throw PetFailure.codexFailed("Codex app-server 已断开。")
         }
         self.process = process
         stdin = input.fileHandleForWriting
         stdout = output.fileHandleForReading
-        stderrHandle = errors.fileHandleForReading
         iterator = stream.makeAsyncIterator()
     }
-
     private func nextMessage() async throws -> [String: Any] {
         while true {
             if let newline = outputBuffer.firstIndex(of: 0x0A) {
@@ -523,28 +330,26 @@ private actor CodexEngine {
                 guard !line.isEmpty else { continue }
                 guard let object = try? JSONSerialization.jsonObject(with: Data(line)),
                       let message = object as? [String: Any] else {
-                    throw CodexEngineError.invalidResponse
+                    throw PetFailure.invalidCodexOutput
                 }
                 return message
             }
             guard var iterator, let data = try await iterator.next() else {
                 stop()
-                throw CodexEngineError.disconnected(stderr.message())
+                throw PetFailure.codexFailed("Codex app-server 已断开。")
             }
             self.iterator = iterator
             outputBuffer.append(data)
         }
     }
-
     private func send(_ message: [String: Any]) throws {
         guard let stdin, process?.isRunning == true else {
-            throw CodexEngineError.disconnected(stderr.message())
+            throw PetFailure.codexFailed("Codex app-server 已断开。")
         }
         var data = try JSONSerialization.data(withJSONObject: message)
         data.append(0x0A)
         try stdin.write(contentsOf: data)
     }
-
     private func finishCurrentTurn() async {
         cancelRequested = true
         interruptActiveTurn()
@@ -554,11 +359,9 @@ private actor CodexEngine {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
-
     private func interruptActiveTurn() {
         if let threadID, let activeTurnID { interrupt(threadID, activeTurnID) }
     }
-
     private func interrupt(_ threadID: String, _ turnID: String) {
         requestID += 1
         try? send([
@@ -567,7 +370,6 @@ private actor CodexEngine {
             "params": ["threadId": threadID, "turnId": turnID]
         ])
     }
-
     private func discardThread() {
         if let threadID {
             requestID += 1
@@ -578,25 +380,17 @@ private actor CodexEngine {
             ])
         }
         threadID = nil
-        threadConfiguration = nil
-        skillPending = true
-        bufferedEvents.removeAll()
     }
-
     private func stop() {
         stdout?.readabilityHandler = nil
-        stderrHandle?.readabilityHandler = nil
         process?.terminationHandler = nil
         if process?.isRunning == true { process?.terminate() }
         continuation?.finish()
-        process = nil; stdin = nil; stdout = nil; stderrHandle = nil
+        process = nil; stdin = nil; stdout = nil
         continuation = nil; iterator = nil
         outputBuffer.removeAll(keepingCapacity: true)
-        initialized = false
-        threadID = nil; threadConfiguration = nil; activeTurnID = nil
-        skillPath = nil; skillPending = true
+        threadID = nil; activeTurnID = nil
     }
-
     private func launchEnvironment() -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         let directory = executableURL.deletingLastPathComponent()
@@ -607,69 +401,44 @@ private actor CodexEngine {
         environment["PATH"] = paths.joined(separator: ":")
         return environment
     }
-
     private func writeImage(_ data: Data?) throws -> URL? {
         guard let data else { return nil }
         let url = workingDirectory.appendingPathComponent("observation-\(UUID().uuidString).png")
         try data.write(to: url, options: .atomic)
         return url
     }
-
     private func pruneHistory(_ turns: Int) {
-        let entries = max(2, turns * 2)
+        let entries = max(1, turns)
         let bytes = max(24_000, min(200_000, turns * 16_000))
         while history.count > entries
             || history.reduce(0, { $0 + $1.utf8.count }) > bytes {
             history.removeFirst()
         }
     }
-
     private static func turnInput(
         prompt: String,
-        imageURL: URL?,
-        skillPath: String?
+        imageURL: URL?
     ) -> [[String: Any]] {
         var input: [[String: Any]] = [[
             "type": "text",
-            "text": skillPath == nil ? prompt : "$jellypet-takeover\n\(prompt)"
+            "text": prompt
         ]]
-        if let skillPath {
-            input.append([
-                "type": "skill",
-                "name": "jellypet-takeover",
-                "path": skillPath
-            ])
-        }
         if let imageURL {
             input.append(["type": "localImage", "path": imageURL.path])
         }
         return input
     }
-
     private static func decodeTool(_ params: [String: Any]) throws -> ScreenToolCall {
         guard params["namespace"] as? String == "jellypet",
               let name = params["tool"] as? String,
               let arguments = params["arguments"] as? [String: Any] else {
-            throw CodexEngineError.invalidResponse
+            throw PetFailure.invalidCodexOutput
         }
         if name == "observe" { return .observe }
-        if name == "activate_and_verify" {
-            return .activateAndVerify(try decode(arguments, as: ActivateAndVerifyRequest.self))
-        }
-        let kinds = [
-            "click": "click", "double_click": "doubleClick", "drag": "drag",
-            "type_text": "typeText", "key_press": "keyPress",
-            "navigate": "navigate", "scroll": "scroll", "wait": "wait"
-        ]
-        guard let kind = kinds[name] else { throw CodexEngineError.invalidResponse }
         var object = arguments
-        object["kind"] = kind
-        if let target = arguments["target"] as? [String: Any] {
-            object["target"] = try normalizeTarget(target)
-        }
+        object["kind"] = name
         return .perform(try decode(object, as: ScreenAction.self))
     }
-
     private static func decode<T: Decodable>(
         _ object: [String: Any],
         as type: T.Type
@@ -679,21 +448,6 @@ private actor CodexEngine {
             from: JSONSerialization.data(withJSONObject: object)
         )
     }
-
-    private static func normalizeTarget(_ target: [String: Any]) throws -> [String: Any] {
-        var result = target
-        if target.keys.count == 1, target["elementID"] is String {
-            result["source"] = "element"
-        } else if target.keys.count == 1, target["locator"] is [String: Any] {
-            result["source"] = "locator"
-        } else if Set(target.keys) == ["x", "y"] {
-            result["source"] = "visual"
-        } else {
-            throw CodexEngineError.invalidResponse
-        }
-        return result
-    }
-
     private static func toolResponse(_ result: ScreenToolResult) -> [String: Any] {
         var items: [[String: Any]] = [["type": "inputText", "text": result.message]]
         if let image = result.screenshotPNG {
@@ -704,7 +458,6 @@ private actor CodexEngine {
         }
         return ["contentItems": items, "success": result.success]
     }
-
     private static let dynamicTools: [[String: Any]] = [[
         "type": "namespace",
         "name": "jellypet",
@@ -722,12 +475,6 @@ private actor CodexEngine {
                 "target": semanticTarget,
                 "text": ["type": "string", "minLength": 1, "maxLength": 100_000]
             ], ["target", "text"]),
-            tool("activate_and_verify", "原子执行：刷新、激活一次、再刷新并检查条件。每次调用独立，不保存跨调用限制。", [
-                "targetLocator": locatorSchema,
-                "expectedLocator": locatorSchema,
-                "expectedState": ["type": "string", "enum": ConditionState.allCases.map(\.rawValue)],
-                "expectedValueEquals": ["type": "string", "maxLength": 100_000]
-            ], ["targetLocator", "expectedLocator", "expectedState"]),
             tool("key_press", "发送一个按键与可选修饰键。", [
                 "key": ["type": "string", "enum": ScreenKey.allCases.map(\.rawValue)],
                 "modifiers": ["type": "array", "items": ["type": "string", "enum": KeyModifier.allCases.map(\.rawValue)], "uniqueItems": true]
@@ -745,7 +492,6 @@ private actor CodexEngine {
             ], ["milliseconds"])
         ]
     ]]
-
     private static let coordinate = integer(0, 1_000)
     private static let matcher = object([
         "text": ["type": "string", "minLength": 1, "maxLength": 1_000],
@@ -758,7 +504,7 @@ private actor CodexEngine {
         "application": matcher, "window": matcher, "pageURL": matcher,
         "role": role, "label": matcher, "value": matcher,
         "ancestorRole": role, "ancestorLabel": matcher, "ancestorValue": matcher,
-        "ordinal": integer(0, 249), "requiresEnabled": ["type": "boolean"]
+        "ordinal": integer(0, 249)
     ])
     private static let targetSchema: [String: Any] = ["oneOf": [
         object(["elementID": ["type": "string", "minLength": 1]], ["elementID"]),
@@ -769,7 +515,6 @@ private actor CodexEngine {
         object(["elementID": ["type": "string", "minLength": 1]], ["elementID"]),
         object(["locator": locatorSchema], ["locator"])
     ]]
-
     private static func tool(
         _ name: String,
         _ description: String,
@@ -781,7 +526,6 @@ private actor CodexEngine {
             "inputSchema": object(properties, required)
         ]
     }
-
     private static func object(
         _ properties: [String: Any],
         _ required: [String] = []
@@ -791,28 +535,19 @@ private actor CodexEngine {
             "required": required, "additionalProperties": false
         ]
     }
-
     private static func integer(_ minimum: Int, _ maximum: Int) -> [String: Any] {
         ["type": "integer", "minimum": minimum, "maximum": maximum]
     }
-
     private static func integerID(_ value: Any?) -> Int? {
         (value as? Int) ?? (value as? NSNumber)?.intValue
     }
-
     private static func errorText(_ value: Any?) -> String {
-        if let error = value as? [String: Any] {
-            let text = [error["message"] as? String, error["additionalDetails"] as? String]
-                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "；")
-            if !text.isEmpty { return String(text.prefix(2_000)) }
-        }
-        guard let value,
-              JSONSerialization.isValidJSONObject(["error": value]),
-              let data = try? JSONSerialization.data(withJSONObject: value),
-              let text = String(data: data, encoding: .utf8) else {
+        guard let error = value as? [String: Any] else {
             return "Codex app-server 返回了未知错误。"
         }
-        return String(text.prefix(2_000))
+        let text = [error["message"] as? String, error["additionalDetails"] as? String]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "；")
+        return text.isEmpty ? "Codex app-server 返回了未知错误。" : String(text.prefix(2_000))
     }
 }
 

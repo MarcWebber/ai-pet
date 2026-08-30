@@ -1,872 +1,310 @@
 import AppKit
 import JellyCore
+import SwiftUI
 
 @MainActor
-final class SettingsFormView: NSView, NSTextFieldDelegate, NSTextViewDelegate {
-    enum Action {
-        case display(UInt32)
-        case assistant(AssistantPreferences)
-        case activityDetails(Bool)
-        case typingSpeed(Int)
-        case shortcut(GlobalShortcut)
-        case answerScrollShortcut(AnswerScrollShortcut)
-        case answerHistoryShortcut(AnswerHistoryShortcut)
-        case chooseSprite
-        case resetSprite
-        case revealConfiguration
-        case finish
-    }
+enum SettingsAction {
+    case display(UInt32)
+    case assistant(AssistantPreferences)
+    case activityDetails(Bool)
+    case typingSpeed(Int)
+    case shortcut(GlobalShortcut)
+    case answerScrollShortcut(ArrowShortcut)
+    case answerHistoryShortcut(ArrowShortcut)
+    case chooseSprite, resetSprite, revealConfiguration, finish
+}
 
-    override var isFlipped: Bool { true }
-    var onAction: ((Action) -> Void)?
-
-    private let mark = JellyMarkView(size: 56)
-    private let title = NSTextField(labelWithString: "")
-    private let subtitle = NSTextField(wrappingLabelWithString: "")
-    private let display = NSPopUpButton()
-    private let displayDetail = NSTextField(labelWithString: "")
-    private let modelSuggestions = NSPopUpButton()
-    private let modelField = NSTextField()
-    private let effort = NSPopUpButton()
-    private let historyField = NSTextField()
-    private let historyStepper = NSStepper()
-    private let activityDetails = NSSwitch()
-    private let typingSpeedField = NSTextField()
-    private let typingSpeedStepper = NSStepper()
-    private let custom = NSTextView()
-    private let customScroll = NSScrollView()
-    private let shortcut = NSPopUpButton()
-    private let answerScrollShortcut = NSPopUpButton()
-    private let answerHistoryShortcut = NSPopUpButton()
-    private let codexStatus = NSTextField(wrappingLabelWithString: "检查中…")
-    private let spriteStatus = NSTextField(wrappingLabelWithString: "使用内置外形")
-    private let configurationStatus = NSTextField(wrappingLabelWithString: "")
-    private let chooseSprite = CartoonButton()
-    private let resetSprite = CartoonButton()
-    private let revealConfiguration = CartoonButton()
-    private let done = CartoonButton()
-    private var displays: [DisplayDescriptor] = []
-    private var assistant = AssistantPreferences.default
-    private var cartoonCards: [CartoonCardView] = []
-    private let automaticModelLabel = "自动（使用 Codex 默认模型）"
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        buildContent()
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    func verifyEditableLayout() -> (passed: Bool, message: String) {
-        layoutSubtreeIfNeeded()
-        customScroll.layoutSubtreeIfNeeded()
-        let modelRect = convert(modelField.bounds, from: modelField)
-        let customRect = convert(customScroll.bounds, from: customScroll)
-        let cardRects = cartoonCards.map { convert($0.bounds, from: $0) }
-        let cardsAreVisible = cardRects.allSatisfy {
-            $0.width >= 600
-                && $0.height >= 90
-                && $0.minX >= bounds.minX
-                && $0.maxX <= bounds.maxX
-                && $0.minY >= bounds.minY
-                && $0.maxY <= bounds.maxY
-        }
-        let cardsAreOrdered = zip(cardRects, cardRects.dropFirst())
-            .allSatisfy { pair in pair.0.maxY < pair.1.minY }
-        let actionButtons = [
-            chooseSprite,
-            resetSprite,
-            revealConfiguration,
-            done
-        ]
-        let buttonsAreStyled = actionButtons.allSatisfy {
-            $0.isCartoonStyled
-                && $0.isContentCentered
-                && $0.bounds.height >= 30
-        }
-        let inputPopups = [
-            display,
-            modelSuggestions,
-            effort,
-            shortcut,
-            answerScrollShortcut,
-            answerHistoryShortcut
-        ]
-        let inputsAreStyled = inputPopups.allSatisfy {
-            !$0.isBordered
-                && ($0.layer?.cornerRadius ?? 0) >= 10
-                && ($0.layer?.borderWidth ?? 0) >= 1
-                && $0.layer?.backgroundColor != nil
-        } && custom.drawsBackground
-            && customScroll.layer?.backgroundColor != nil
-        let passed = modelField.bounds.width >= 340
-            && customScroll.bounds.width >= 380
-            && customScroll.bounds.height >= 96
-            && custom.bounds.width >= 360
-            && cartoonCards.count == 4
-            && cardsAreVisible
-            && cardsAreOrdered
-            && buttonsAreStyled
-            && inputsAreStyled
-            && modelRect.minX >= bounds.minX
-            && modelRect.maxX <= bounds.maxX
-            && customRect.minX >= bounds.minX
-            && customRect.maxX <= bounds.maxX
-        let message = [
-            "cards=\(cardRects.map { Int($0.height) })",
-            "buttons=\(actionButtons.count)",
-            "inputs=\(inputPopups.count + 3)",
-            "model=\(Int(modelField.bounds.width))px",
-            "custom=\(Int(customScroll.bounds.width))×\(Int(customScroll.bounds.height))px"
-        ].joined(separator: ", ")
-        return (passed, message)
-    }
-
-    func render(_ state: SettingsViewState) {
-        assistant = state.assistantPreferences
-        title.stringValue = "果冻的小窝"
-        subtitle.stringValue = "模型、外形和快捷键，都可以在这里慢慢调整"
-        renderDisplays(state)
-        renderModels(state)
-        select(state.assistantPreferences.reasoningEffort.rawValue, in: effort)
-        select(state.globalShortcut.rawValue, in: shortcut)
-        select(state.answerScrollShortcut.rawValue, in: answerScrollShortcut)
-        select(state.answerHistoryShortcut.rawValue, in: answerHistoryShortcut)
-        activityDetails.state = state.showActivityDetails ? .on : .off
-        if typingSpeedField.currentEditor() == nil {
-            typingSpeedField.integerValue = state.typingSpeedPercent
-        }
-        typingSpeedStepper.integerValue = state.typingSpeedPercent
-        if historyField.currentEditor() == nil {
-            historyField.integerValue = state.assistantPreferences
-                .conversationHistoryTurns
-        }
-        historyStepper.integerValue = state.assistantPreferences
-            .conversationHistoryTurns
-        if custom.window?.firstResponder !== custom {
-            custom.string = state.assistantPreferences.customInstructions
-        }
-        codexStatus.stringValue = state.codexStatusText
-        codexStatus.toolTip = state.codexStatusText
-        spriteStatus.stringValue = state.spriteSheetURL.map {
-            "自定义造型 · \($0.lastPathComponent)"
-        } ?? "内置果冻 · 8 种状态 × 8 帧"
-        resetSprite.isEnabled = state.spriteSheetURL != nil
-        try? mark.setSpriteSheet(at: state.spriteSheetURL)
-        configurationStatus.stringValue = [
-            Optional(state.configurationURL.path),
-            state.configurationError
-        ].compactMap { $0?.isEmpty == false ? $0 : nil }
-            .joined(separator: "\n")
-        configurationStatus.toolTip = configurationStatus.stringValue
-        done.isEnabled = true
-    }
-
-    private func buildContent() {
-        let backdrop = CartoonBackdropView()
-        title.font = roundedFont(ofSize: 27, weight: .bold)
-        title.textColor = .systemPurple
-        subtitle.font = roundedFont(ofSize: 13, weight: .medium)
-        subtitle.textColor = .secondaryLabelColor
-        let heading = stack(
-            [mark, stack([title, subtitle], .vertical, 4)],
-            .horizontal,
-            14
-        )
-
-        configure(display, action: #selector(displayChanged))
-        configure(modelSuggestions, action: #selector(modelSuggestionChanged))
-        modelField.placeholderString = "模型 ID，例如 gpt-5.6-luna；留空表示自动"
-        modelField.delegate = self
-        modelField.target = self
-        modelField.action = #selector(modelFieldChanged)
-        modelField.toolTip = "可以从建议中选择，也可以输入 Codex 支持的模型 ID。"
-        configure(
-            effort,
-            values: ReasoningEffort.allCases,
-            title: \.displayName,
-            action: #selector(effortChanged)
-        )
-        historyField.delegate = self
-        historyField.alignment = .right
-        historyField.formatter = Self.historyFormatter()
-        historyStepper.minValue = Double(
-            JellyConfiguration.Conversation.minimumHistoryTurns
-        )
-        historyStepper.maxValue = Double(
-            JellyConfiguration.Conversation.maximumHistoryTurns
-        )
-        historyStepper.increment = 1
-        configure(historyStepper, action: #selector(historyStepperChanged))
-
-        configure(
-            shortcut,
-            values: GlobalShortcut.allCases,
-            title: \.label,
-            action: #selector(shortcutChanged)
-        )
-        configure(
-            answerScrollShortcut,
-            values: AnswerScrollShortcut.allCases,
-            title: \.label,
-            action: #selector(answerScrollShortcutChanged)
-        )
-        answerScrollShortcut.toolTip = "回答打开时，上箭头向上翻页，下箭头向下翻页。"
-        configure(
-            answerHistoryShortcut,
-            values: AnswerHistoryShortcut.allCases,
-            title: \.label,
-            action: #selector(answerHistoryShortcutChanged)
-        )
-        answerHistoryShortcut.toolTip = "左箭头查看上一次回答，右箭头返回下一次回答。"
-        configure(activityDetails, action: #selector(activityDetailsChanged))
-        typingSpeedField.delegate = self
-        typingSpeedField.alignment = .right
-        typingSpeedField.formatter = Self.typingSpeedFormatter()
-        typingSpeedStepper.minValue = Double(TypingRhythm.minimumSpeedPercent)
-        typingSpeedStepper.maxValue = Double(TypingRhythm.maximumSpeedPercent)
-        typingSpeedStepper.increment = 5
-        configure(
-            typingSpeedStepper,
-            action: #selector(typingSpeedStepperChanged)
-        )
-
-        custom.delegate = self
-        custom.isRichText = false
-        custom.isAutomaticQuoteSubstitutionEnabled = false
-        custom.isAutomaticDashSubstitutionEnabled = false
-        custom.font = roundedFont(ofSize: 13, weight: .regular)
-        custom.textContainerInset = NSSize(width: 7, height: 7)
-        custom.frame = NSRect(x: 0, y: 0, width: 390, height: 104)
-        custom.minSize = .zero
-        custom.maxSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        custom.autoresizingMask = [.width]
-        custom.isVerticallyResizable = true
-        custom.isHorizontallyResizable = false
-        custom.textContainer?.widthTracksTextView = true
-        custom.toolTip = "追加给当前 Agent，不会改变截图问答的只观察边界。"
-        customScroll.documentView = custom
-        customScroll.hasVerticalScroller = true
-        customScroll.autohidesScrollers = true
-        customScroll.borderType = .noBorder
-        customScroll.drawsBackground = true
-        let editorBackground = pastelInputColor(.systemPurple, strength: 0.08)
-        custom.drawsBackground = true
-        custom.backgroundColor = editorBackground
-        customScroll.backgroundColor = editorBackground
-        customScroll.wantsLayer = true
-        customScroll.layer?.backgroundColor = editorBackground.cgColor
-        customScroll.layer?.cornerRadius = 12
-        customScroll.layer?.cornerCurve = .continuous
-        customScroll.layer?.borderWidth = 1
-        customScroll.layer?.borderColor = NSColor.systemPurple
-            .withAlphaComponent(0.22).cgColor
-
-        [display, modelSuggestions, effort, shortcut,
-         answerScrollShortcut, answerHistoryShortcut].forEach {
-            $0.controlSize = .large
-            $0.font = roundedFont(ofSize: 13, weight: .semibold)
-            $0.contentTintColor = .systemPurple
-        }
-        stylePopup(display, color: .systemBlue)
-        [modelSuggestions, effort].forEach {
-            stylePopup($0, color: .systemPurple)
-        }
-        [shortcut, answerScrollShortcut, answerHistoryShortcut].forEach {
-            stylePopup($0, color: .systemOrange)
-        }
-        modelField.controlSize = .large
-        modelField.font = roundedFont(ofSize: 13, weight: .medium)
-        modelField.bezelStyle = .roundedBezel
-        styleTextField(modelField, color: .systemPurple)
-        historyField.font = roundedFont(ofSize: 13, weight: .semibold)
-        styleTextField(historyField, color: .systemPurple)
-        typingSpeedField.font = roundedFont(ofSize: 13, weight: .semibold)
-        styleTextField(typingSpeedField, color: .systemOrange)
-        displayDetail.font = roundedFont(ofSize: 12, weight: .medium)
-        codexStatus.font = roundedFont(ofSize: 12, weight: .medium)
-        spriteStatus.font = roundedFont(ofSize: 12.5, weight: .semibold)
-        configurationStatus.font = .monospacedSystemFont(
-            ofSize: 10.5,
-            weight: .regular
-        )
-        configurationStatus.textColor = .secondaryLabelColor
-
-        configure(
-            chooseSprite,
-            title: "导入造型",
-            symbolName: "photo.badge.plus",
-            color: .systemPink,
-            action: #selector(chooseSpriteClicked)
-        )
-        configure(
-            resetSprite,
-            title: "恢复内置",
-            symbolName: "arrow.counterclockwise",
-            color: .systemPurple,
-            action: #selector(resetSpriteClicked)
-        )
-        configure(
-            revealConfiguration,
-            title: "打开配置",
-            symbolName: "folder.fill",
-            color: .systemBlue,
-            action: #selector(revealConfigurationClicked)
-        )
-        configure(
-            done,
-            title: "完成设置",
-            symbolName: "checkmark.circle.fill",
-            color: .systemPurple,
-            filled: true,
-            action: #selector(finishSetup)
-        )
-        done.keyEquivalent = "\r"
-
-        let displayBlock = stack([display, displayDetail], .vertical, 3)
-        let modelBlock = stack(
-            [modelSuggestions, modelField],
-            .vertical,
-            6
-        )
-        let historyBlock = stack(
-            [historyField, historyStepper, label("轮（1–50）")],
-            .horizontal,
-            7
-        )
-        let activityBlock = stack([
-            label("显示观察、工具调用、回复和操作结果"),
-            NSView(),
-            activityDetails
-        ], .horizontal, 8)
-        let typingSpeedBlock = stack([
-            typingSpeedField,
-            typingSpeedStepper,
-            label("%（数值越低越慢）")
-        ], .horizontal, 7)
-        let spriteButtons = stack(
-            [chooseSprite, resetSprite],
-            .horizontal,
-            8
-        )
-        let spriteBlock = stack(
-            [spriteStatus, spriteButtons],
-            .vertical,
-            6
-        )
-        let configBlock = stack(
-            [configurationStatus, revealConfiguration],
-            .vertical,
-            6
-        )
-        let screenCard = sectionCard(
-            title: "屏幕观察",
-            symbolName: "display",
-            subtitle: "选择它截图问答或接管时观察的显示器。",
-            tint: .systemBlue,
-            rows: [
-                row("观察屏幕", displayBlock)
-            ]
-        )
-        let brainCard = sectionCard(
-            title: "Codex",
-            symbolName: "brain.head.profile",
-            subtitle: "设置模型、思考力度和果冻能够记住的对话。",
-            tint: .systemPurple,
-            rows: [
-                row("使用模型", modelBlock),
-                row("思考力度", effort),
-                row("记住对话", historyBlock),
-                row("自定义指令", customScroll),
-                row("连接状态", codexStatus)
-            ]
-        )
-        let appearanceCard = sectionCard(
-            title: "果冻外形",
-            symbolName: "paintpalette.fill",
-            subtitle: "可以使用内置造型，也可以导入自己的 8×8 动画图。",
-            tint: .systemPink,
-            rows: [
-                row("当前造型", spriteBlock),
-                row("配置位置", configBlock)
-            ]
-        )
-        let controlsCard = sectionCard(
-            title: "显示与快捷键",
-            symbolName: "keyboard.fill",
-            subtitle: "调整过程详情，以及不移动鼠标也能使用的快捷操作。",
-            tint: .systemOrange,
-            rows: [
-                row("过程详情", activityBlock),
-                row("渐入速度", typingSpeedBlock),
-                row("唤醒 / 停止", shortcut),
-                row("滚动回答", answerScrollShortcut),
-                row("切换回答", answerHistoryShortcut)
-            ]
-        )
-        let footer = stack([
-            chip("8 种状态 · 每种 8 帧动画", color: .systemPurple),
-            NSView(),
-            done
-        ], .horizontal, 10)
-        let content = stack([
-            heading,
-            screenCard,
-            brainCard,
-            appearanceCard,
-            controlsCard,
-            footer
-        ], .vertical, 14)
-
-        [backdrop, content].forEach {
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            addSubview($0)
-        }
-        NSLayoutConstraint.activate([
-            backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backdrop.topAnchor.constraint(equalTo: topAnchor),
-            backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 30),
-            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -30),
-            content.topAnchor.constraint(equalTo: topAnchor, constant: 20),
-            content.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -22),
-            heading.widthAnchor.constraint(equalTo: content.widthAnchor),
-            screenCard.widthAnchor.constraint(equalTo: content.widthAnchor),
-            brainCard.widthAnchor.constraint(equalTo: content.widthAnchor),
-            appearanceCard.widthAnchor.constraint(equalTo: content.widthAnchor),
-            controlsCard.widthAnchor.constraint(equalTo: content.widthAnchor),
-            footer.widthAnchor.constraint(equalTo: content.widthAnchor),
-            customScroll.heightAnchor.constraint(equalToConstant: 104),
-            modelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
-            historyField.widthAnchor.constraint(equalToConstant: 64),
-            typingSpeedField.widthAnchor.constraint(equalToConstant: 64),
-            done.widthAnchor.constraint(greaterThanOrEqualToConstant: 124),
-            done.heightAnchor.constraint(equalToConstant: 38)
-        ])
-    }
-
-    private func sectionCard(
-        title value: String,
-        symbolName: String,
-        subtitle subtitleValue: String,
-        tint: NSColor,
-        rows: [NSView]
-    ) -> CartoonCardView {
-        let sectionTitle = label(
-            value,
-            color: .labelColor,
-            weight: .bold,
-            size: 15
-        )
-        let sectionSubtitle = NSTextField(
-            wrappingLabelWithString: subtitleValue
-        )
-        sectionSubtitle.font = roundedFont(ofSize: 12, weight: .medium)
-        sectionSubtitle.textColor = .secondaryLabelColor
-        let headerText = stack(
-            [sectionTitle, sectionSubtitle],
-            .vertical,
-            3
-        )
-        headerText.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let header = stack([
-            CartoonIconView(symbolName: symbolName, tint: tint),
-            headerText
-        ], .horizontal, 11)
-        let rowStack = stack(rows, .vertical, 12)
-        rowStack.arrangedSubviews.forEach {
-            $0.widthAnchor.constraint(equalTo: rowStack.widthAnchor)
-                .isActive = true
-        }
-        let cardContent = stack([
-            header,
-            rowStack
-        ], .vertical, 14)
-        let card = CartoonCardView(tint: tint)
-        cartoonCards.append(card)
-        card.addSubview(cardContent)
-        cardContent.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            cardContent.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
-            cardContent.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
-            cardContent.topAnchor.constraint(equalTo: card.topAnchor, constant: 22),
-            cardContent.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18),
-            header.widthAnchor.constraint(equalTo: cardContent.widthAnchor),
-            rowStack.widthAnchor.constraint(equalTo: cardContent.widthAnchor)
-        ])
-        return card
-    }
-
-    private func row(_ name: String, _ control: NSView) -> NSStackView {
-        let name = label(name, weight: .semibold)
-        name.widthAnchor.constraint(equalToConstant: 104).isActive = true
-        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let row = stack([name, control], .horizontal, 12)
-        row.alignment = .top
-        control.widthAnchor.constraint(greaterThanOrEqualToConstant: 390)
-            .isActive = true
-        return row
-    }
-
-    private func label(
-        _ value: String,
-        color: NSColor = .secondaryLabelColor,
-        weight: NSFont.Weight = .regular,
-        size: CGFloat = 12
-    ) -> NSTextField {
-        let field = NSTextField(labelWithString: value)
-        field.font = roundedFont(ofSize: size, weight: weight)
-        field.textColor = color
-        return field
-    }
-
-    private func chip(_ value: String, color: NSColor) -> NSTextField {
-        let field = label(value, color: color, weight: .semibold, size: 11)
-        field.alignment = .center
-        field.wantsLayer = true
-        field.layer?.cornerRadius = 11
-        field.layer?.backgroundColor = color.withAlphaComponent(0.10).cgColor
-        field.layer?.borderWidth = 1
-        field.layer?.borderColor = color.withAlphaComponent(0.22).cgColor
-        field.widthAnchor.constraint(equalToConstant: 168).isActive = true
-        field.heightAnchor.constraint(equalToConstant: 24).isActive = true
-        return field
-    }
-
-    private func stack(
-        _ views: [NSView],
-        _ orientation: NSUserInterfaceLayoutOrientation,
-        _ spacing: CGFloat
-    ) -> NSStackView {
-        let stack = NSStackView(views: views)
-        stack.orientation = orientation
-        stack.alignment = orientation == .horizontal ? .centerY : .leading
-        stack.spacing = spacing
-        return stack
-    }
-
-    private func configure(_ control: NSControl, action: Selector) {
-        control.target = self
-        control.action = action
-    }
-
-    private func configure(
-        _ button: CartoonButton,
-        title: String,
-        symbolName: String,
-        color: NSColor,
-        filled: Bool = false,
-        action: Selector
-    ) {
-        button.applyStyle(
-            title: title,
-            symbolName: symbolName,
-            color: color,
-            filled: filled,
-            font: roundedFont(
-                ofSize: filled ? 13 : 12,
-                weight: filled ? .bold : .semibold
-            )
-        )
-        configure(button, action: action)
-    }
-
-    private func stylePopup(
-        _ popup: NSPopUpButton,
-        color: NSColor
-    ) {
-        popup.isBordered = false
-        popup.focusRingType = .none
-        popup.contentTintColor = color
-        popup.wantsLayer = true
-        popup.layer?.cornerRadius = 10
-        popup.layer?.cornerCurve = .continuous
-        popup.layer?.backgroundColor = pastelInputColor(
-            color,
-            strength: 0.08
-        ).cgColor
-        popup.layer?.borderWidth = 1
-        popup.layer?.borderColor = color.withAlphaComponent(0.20).cgColor
-        popup.heightAnchor.constraint(greaterThanOrEqualToConstant: 30)
-            .isActive = true
-    }
-
-    private func styleTextField(
-        _ field: NSTextField,
-        color: NSColor
-    ) {
-        field.drawsBackground = true
-        field.backgroundColor = pastelInputColor(color, strength: 0.08)
-        field.wantsLayer = true
-        field.layer?.cornerRadius = 10
-        field.layer?.cornerCurve = .continuous
-        field.layer?.borderWidth = 1
-        field.layer?.borderColor = color.withAlphaComponent(0.20).cgColor
-    }
-
-    private func pastelInputColor(
-        _ color: NSColor,
-        strength: CGFloat
-    ) -> NSColor {
-        NSColor.controlBackgroundColor.blended(
-            withFraction: strength,
-            of: color
-        ) ?? .controlBackgroundColor
-    }
-
-    private func roundedFont(
-        ofSize size: CGFloat,
-        weight: NSFont.Weight
-    ) -> NSFont {
-        let base = NSFont.systemFont(ofSize: size, weight: weight)
-        guard let descriptor = base.fontDescriptor.withDesign(.rounded),
-              let font = NSFont(descriptor: descriptor, size: size)
-        else {
-            return base
-        }
-        return font
-    }
-
-    private func configure<Value: RawRepresentable>(
-        _ popup: NSPopUpButton,
-        values: [Value],
-        title: KeyPath<Value, String>,
-        action: Selector
-    ) where Value.RawValue == String {
-        for value in values {
-            popup.addItem(withTitle: value[keyPath: title])
-            popup.lastItem?.representedObject = value.rawValue
-        }
-        configure(popup, action: action)
-    }
-
-    private func select(_ rawValue: String, in popup: NSPopUpButton) {
-        popup.select(popup.itemArray.first {
-            ($0.representedObject as? String) == rawValue
-        })
-    }
-
-    private func selected<Value: RawRepresentable>(
-        _ popup: NSPopUpButton
-    ) -> Value? where Value.RawValue == String {
-        (popup.selectedItem?.representedObject as? String)
-            .flatMap(Value.init(rawValue:))
-    }
-
-    private func publishAssistant(
+@MainActor
+private final class SettingsModel: ObservableObject {
+    @Published var state = SettingsViewState.placeholder
+    var onAction: ((SettingsAction) -> Void)?
+    func assistant(
         model: String? = nil,
         effort: ReasoningEffort? = nil,
-        customInstructions: String? = nil,
-        historyTurns: Int? = nil
+        instructions: String? = nil,
+        turns: Int? = nil
     ) {
-        assistant = AssistantPreferences(
-            model: model ?? assistant.model,
-            reasoningEffort: effort ?? assistant.reasoningEffort,
-            customInstructions:
-                customInstructions ?? assistant.customInstructions,
-            conversationHistoryTurns:
-                historyTurns ?? assistant.conversationHistoryTurns
+        let old = state.assistantPreferences
+        let value = AssistantPreferences(
+            model: model ?? old.model,
+            reasoningEffort: effort ?? old.reasoningEffort,
+            customInstructions: instructions ?? old.customInstructions,
+            conversationHistoryTurns: turns ?? old.conversationHistoryTurns
         )
-        onAction?(.assistant(assistant))
-    }
-
-    @objc private func displayChanged() {
-        guard let id = (display.selectedItem?.representedObject as? NSNumber)?
-            .uint32Value else { return }
-        displayDetail.stringValue = detail(
-            for: displays.first { $0.id == id }
-        )
-        onAction?(.display(id))
-    }
-
-    @objc private func modelSuggestionChanged() {
-        let value = modelSuggestions.selectedItem?.representedObject as? String
-            ?? AssistantPreferences.defaultModel
-        modelField.stringValue = value == AssistantPreferences.defaultModel
-            ? "" : value
-        publishAssistant(model: value)
-    }
-
-    @objc private func modelFieldChanged() {
-        publishAssistant(model: normalizedModel(modelField.stringValue))
-    }
-
-    @objc private func effortChanged() {
-        publishAssistant(effort: selected(effort))
-    }
-
-    @objc private func historyStepperChanged() {
-        historyField.integerValue = historyStepper.integerValue
-        publishAssistant(historyTurns: historyStepper.integerValue)
-    }
-
-    @objc private func activityDetailsChanged() {
-        onAction?(.activityDetails(activityDetails.state == .on))
-    }
-
-    @objc private func typingSpeedStepperChanged() {
-        let value = TypingRhythm.normalizedSpeedPercent(
-            typingSpeedStepper.integerValue
-        )
-        typingSpeedField.integerValue = value
-        onAction?(.typingSpeed(value))
-    }
-
-    @objc private func shortcutChanged() {
-        if let value: GlobalShortcut = selected(shortcut) {
-            onAction?(.shortcut(value))
-        }
-    }
-
-    @objc private func answerScrollShortcutChanged() {
-        if let value: AnswerScrollShortcut = selected(answerScrollShortcut) {
-            onAction?(.answerScrollShortcut(value))
-        }
-    }
-
-    @objc private func answerHistoryShortcutChanged() {
-        if let value: AnswerHistoryShortcut = selected(answerHistoryShortcut) {
-            onAction?(.answerHistoryShortcut(value))
-        }
-    }
-
-    @objc private func chooseSpriteClicked() {
-        onAction?(.chooseSprite)
-    }
-
-    @objc private func resetSpriteClicked() {
-        onAction?(.resetSprite)
-    }
-
-    @objc private func revealConfigurationClicked() {
-        onAction?(.revealConfiguration)
-    }
-
-    @objc private func finishSetup() {
-        publishCustomInstructions()
-        onAction?(.finish)
-    }
-
-    func controlTextDidEndEditing(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField else { return }
-        if field === modelField {
-            modelFieldChanged()
-        } else if field === historyField {
-            let value = min(
-                max(
-                    historyField.integerValue,
-                    JellyConfiguration.Conversation.minimumHistoryTurns
-                ),
-                JellyConfiguration.Conversation.maximumHistoryTurns
-            )
-            historyField.integerValue = value
-            historyStepper.integerValue = value
-            publishAssistant(historyTurns: value)
-        } else if field === typingSpeedField {
-            let value = TypingRhythm.normalizedSpeedPercent(
-                typingSpeedField.integerValue
-            )
-            typingSpeedField.integerValue = value
-            typingSpeedStepper.integerValue = value
-            onAction?(.typingSpeed(value))
-        }
-    }
-
-    func textDidEndEditing(_ notification: Notification) {
-        guard notification.object as? NSTextView === custom else { return }
-        publishCustomInstructions()
-    }
-
-    private func publishCustomInstructions() {
-        let value = custom.string.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        if value != assistant.customInstructions {
-            publishAssistant(customInstructions: value)
-        }
-    }
-
-    private func renderDisplays(_ state: SettingsViewState) {
-        displays = state.displays
-        display.removeAllItems()
-        display.addItem(withTitle: "选择果冻要观察的屏幕…")
-        for item in displays {
-            display.addItem(withTitle: item.name)
-            display.lastItem?.representedObject = NSNumber(value: item.id)
-        }
-        if let id = state.selectedDisplayID,
-           let item = display.itemArray.first(where: {
-               ($0.representedObject as? NSNumber)?.uint32Value == id
-           }) {
-            display.select(item)
-            displayDetail.stringValue = detail(
-                for: displays.first { $0.id == id }
-            )
-        } else {
-            display.selectItem(at: 0)
-            displayDetail.stringValue = displays.isEmpty
-                ? "授权后会列出可用屏幕" : "请选择一个屏幕"
-        }
-        display.isEnabled = !displays.isEmpty
-    }
-
-    private func renderModels(_ state: SettingsViewState) {
-        let current = state.assistantPreferences.model
-        modelSuggestions.removeAllItems()
-        modelSuggestions.addItem(withTitle: automaticModelLabel)
-        modelSuggestions.lastItem?.representedObject =
-            AssistantPreferences.defaultModel
-        for option in state.modelOptions {
-            modelSuggestions.addItem(withTitle: option)
-            modelSuggestions.lastItem?.representedObject = option
-        }
-        if let item = modelSuggestions.itemArray.first(where: {
-            ($0.representedObject as? String) == current
-        }) {
-            modelSuggestions.select(item)
-        } else {
-            modelSuggestions.selectItem(at: 0)
-        }
-        if modelField.currentEditor() == nil {
-            modelField.stringValue = current == AssistantPreferences.defaultModel
-                ? "" : current
-        }
-    }
-
-    private func normalizedModel(_ value: String) -> String {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? AssistantPreferences.defaultModel
-            : String(value.prefix(200))
-    }
-
-    private func detail(for display: DisplayDescriptor?) -> String {
-        guard let display else { return "请选择一个屏幕" }
-        return "\(display.width) × \(display.height)\(display.isPrimary ? " · 主屏幕" : "")"
-    }
-
-    private static func historyFormatter() -> NumberFormatter {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .none
-        formatter.allowsFloats = false
-        formatter.minimum = NSNumber(
-            value: JellyConfiguration.Conversation.minimumHistoryTurns
-        )
-        formatter.maximum = NSNumber(
-            value: JellyConfiguration.Conversation.maximumHistoryTurns
-        )
-        return formatter
-    }
-
-    private static func typingSpeedFormatter() -> NumberFormatter {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .none
-        formatter.allowsFloats = false
-        formatter.minimum = NSNumber(value: TypingRhythm.minimumSpeedPercent)
-        formatter.maximum = NSNumber(value: TypingRhythm.maximumSpeedPercent)
-        return formatter
+        state.assistantPreferences = value
+        onAction?(.assistant(value))
     }
 }
+
+@MainActor
+final class SettingsFormView: NSHostingView<SettingsRoot> {
+    typealias Action = SettingsAction
+    private let model: SettingsModel
+    var onAction: ((Action) -> Void)? {
+        get { model.onAction }
+        set { model.onAction = newValue }
+    }
+    init() {
+        let model = SettingsModel()
+        self.model = model
+        super.init(rootView: SettingsRoot(model: model))
+    }
+    @available(*, unavailable)
+    required init(rootView: SettingsRoot) { fatalError() }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+    func render(_ state: SettingsViewState) { model.state = state }
+}
+
+@MainActor
+struct SettingsRoot: View {
+    @ObservedObject fileprivate var model: SettingsModel
+    private var state: SettingsViewState { model.state }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                screenCard
+                codexCard
+                appearanceCard
+                controlsCard
+                HStack {
+                    Text("8 种状态 · 每种 8 帧动画")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.purple)
+                    Spacer()
+                    Button("完成设置") { model.onAction?(.finish) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.purple)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(28)
+        }
+        .frame(minWidth: 620, minHeight: 760)
+        .background(
+            LinearGradient(
+                colors: [Color.purple.opacity(0.08), Color.pink.opacity(0.06), .clear],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+    }
+    private var header: some View {
+        HStack(spacing: 14) {
+            Text("🪼").font(.system(size: 42))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("果冻的小窝").font(.system(size: 27, weight: .bold, design: .rounded))
+                    .foregroundStyle(.purple)
+                Text("模型、外形和快捷键，都可以在这里慢慢调整")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var screenCard: some View {
+        card("屏幕观察", icon: "display", tint: .blue) {
+            setting("观察屏幕") {
+                Picker("", selection: displayBinding) {
+                    Text("选择果冻要观察的屏幕…").tag(UInt32?.none)
+                    ForEach(state.displays, id: \.id) { display in
+                        Text(display.name).tag(Optional(display.id))
+                    }
+                }
+                .labelsHidden()
+                Text(displayDetail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var codexCard: some View {
+        card("Codex", icon: "brain.head.profile", tint: .purple) {
+            setting("使用模型") {
+                Picker("", selection: modelPickerBinding) {
+                    Text("自动（Codex 默认）").tag(AssistantPreferences.defaultModel)
+                    ForEach(state.modelOptions, id: \.self) { Text($0).tag($0) }
+                }
+                .labelsHidden()
+                TextField("也可直接输入模型 ID", text: modelTextBinding)
+                    .textFieldStyle(.roundedBorder)
+            }
+            setting("思考力度") {
+                Picker("", selection: effortBinding) {
+                    ForEach(ReasoningEffort.allCases, id: \.self) {
+                        Text($0.displayName).tag($0)
+                    }
+                }
+                .labelsHidden()
+            }
+            setting("记住对话") {
+                Stepper(
+                    "\(state.assistantPreferences.conversationHistoryTurns) 轮",
+                    value: historyBinding,
+                    in: 1...50
+                )
+            }
+            setting("自定义指令") {
+                TextEditor(text: instructionsBinding)
+                    .font(.body)
+                    .frame(minHeight: 92)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+            }
+            setting("连接状态") {
+                Text(state.codexStatusText).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var appearanceCard: some View {
+        card("果冻外形", icon: "paintpalette.fill", tint: .pink) {
+            setting("当前造型") {
+                Text(state.spriteSheetURL.map { "自定义 · \($0.lastPathComponent)" }
+                    ?? "内置果冻 · 8×8 动画")
+                HStack {
+                    Button("导入造型") { model.onAction?(.chooseSprite) }
+                    Button("恢复内置") { model.onAction?(.resetSprite) }
+                        .disabled(state.spriteSheetURL == nil)
+                }
+            }
+            setting("配置位置") {
+                Text(state.configurationURL.path)
+                    .font(.caption.monospaced()).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                if let error = state.configurationError {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+                Button("在 Finder 中打开") { model.onAction?(.revealConfiguration) }
+            }
+        }
+    }
+    private var controlsCard: some View {
+        card("显示与快捷键", icon: "keyboard.fill", tint: .orange) {
+            setting("过程详情") {
+                Toggle("显示观察、动作和结果", isOn: activityBinding)
+            }
+            setting("键入速度") {
+                Stepper(
+                    "\(state.typingSpeedPercent)%（数值越低越慢）",
+                    value: typingBinding,
+                    in: TypingRhythm.minimumSpeedPercent...TypingRhythm.maximumSpeedPercent,
+                    step: 5
+                )
+            }
+            setting("唤醒 / 停止") {
+                enumPicker(GlobalShortcut.allCases, selection: shortcutBinding)
+            }
+            setting("滚动回答") {
+                enumPicker(ArrowShortcut.allCases, selection: scrollBinding)
+            }
+            setting("切换回答") {
+                enumPicker(ArrowShortcut.allCases, selection: historyShortcutBinding)
+            }
+        }
+    }
+    private func card<Content: View>(
+        _ title: String,
+        icon: String,
+        tint: Color,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Label(title, systemImage: icon)
+                .font(.headline).foregroundStyle(tint)
+            content()
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(tint.opacity(0.24)))
+    }
+    private func setting<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(title).font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary).frame(width: 96, alignment: .leading)
+            VStack(alignment: .leading, spacing: 7) { content() }
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+    private func enumPicker<Value: RawRepresentable & Hashable>(
+        _ values: [Value],
+        selection: Binding<Value>
+    ) -> some View where Value.RawValue == String {
+        Picker("", selection: selection) {
+            ForEach(values, id: \.self) { value in
+                Text((value as? any ShortcutChoice)?.label ?? value.rawValue).tag(value)
+            }
+        }
+        .labelsHidden()
+    }
+    private var displayBinding: Binding<UInt32?> {
+        stateBinding(\.selectedDisplayID) { $0.map(SettingsAction.display) }
+    }
+    private var modelPickerBinding: Binding<String> { Binding(
+        get: { state.assistantPreferences.model },
+        set: { model.assistant(model: $0) }
+    ) }
+    private var modelTextBinding: Binding<String> { Binding(
+        get: {
+            state.assistantPreferences.model == AssistantPreferences.defaultModel
+                ? "" : state.assistantPreferences.model
+        },
+        set: { model.assistant(model: $0) }
+    ) }
+    private var effortBinding: Binding<ReasoningEffort> { Binding(
+        get: { state.assistantPreferences.reasoningEffort },
+        set: { model.assistant(effort: $0) }
+    ) }
+    private var historyBinding: Binding<Int> { Binding(
+        get: { state.assistantPreferences.conversationHistoryTurns },
+        set: { model.assistant(turns: $0) }
+    ) }
+    private var instructionsBinding: Binding<String> { Binding(
+        get: { state.assistantPreferences.customInstructions },
+        set: { model.assistant(instructions: $0) }
+    ) }
+    private var activityBinding: Binding<Bool> {
+        stateBinding(\.showActivityDetails) { .activityDetails($0) }
+    }
+    private var typingBinding: Binding<Int> { Binding(
+        get: { state.typingSpeedPercent },
+        set: {
+            let value = TypingRhythm.normalizedSpeedPercent($0)
+            model.state.typingSpeedPercent = value
+            model.onAction?(.typingSpeed(value))
+        }
+    ) }
+    private var shortcutBinding: Binding<GlobalShortcut> {
+        stateBinding(\.globalShortcut) { .shortcut($0) }
+    }
+    private var scrollBinding: Binding<ArrowShortcut> {
+        stateBinding(\.answerScrollShortcut) { .answerScrollShortcut($0) }
+    }
+    private var historyShortcutBinding: Binding<ArrowShortcut> {
+        stateBinding(\.answerHistoryShortcut) { .answerHistoryShortcut($0) }
+    }
+    private func stateBinding<Value>(
+        _ path: WritableKeyPath<SettingsViewState, Value>,
+        action: @escaping (Value) -> SettingsAction?
+    ) -> Binding<Value> {
+        Binding(
+            get: { model.state[keyPath: path] },
+            set: {
+                model.state[keyPath: path] = $0
+                if let value = action($0) { model.onAction?(value) }
+            }
+        )
+    }
+    private var displayDetail: String {
+        guard let id = state.selectedDisplayID,
+              let display = state.displays.first(where: { $0.id == id }) else {
+            return state.displays.isEmpty ? "授权后会列出可用屏幕" : "请选择一个屏幕"
+        }
+        return "\(display.width) × \(display.height)\(display.isPrimary ? " · 主屏幕" : "")"
+    }
+}
+
+private protocol ShortcutChoice { var label: String { get } }
+extension GlobalShortcut: ShortcutChoice {}
+extension ArrowShortcut: ShortcutChoice {}

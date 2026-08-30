@@ -10,7 +10,7 @@ private final class ActionGroupSurface: ScreenDriving {
 
     func observe(displayID: UInt32) async throws -> ScreenObservation {
         generation += 1
-        var elements = [
+        let elements = [
             ScreenElement(
                 id: "input-\(generation)",
                 role: .textField,
@@ -27,26 +27,7 @@ private final class ActionGroupSurface: ScreenDriving {
                 isEnabled: true
             )
         ]
-        if activationCount >= 1 {
-            elements.append(ScreenElement(
-                id: "done-\(generation)",
-                role: .button,
-                label: "Done",
-                frame: .init(x: 100, y: 220, width: 120, height: 60),
-                isEnabled: true
-            ))
-        }
-        if activationCount >= 2 {
-            elements.append(ScreenElement(
-                id: "done-again-\(generation)",
-                role: .button,
-                label: "Done again",
-                frame: .init(x: 240, y: 220, width: 160, height: 60),
-                isEnabled: true
-            ))
-        }
         return ScreenObservation(
-            displayID: displayID,
             semantics: ScreenSemantics(
                 applicationName: "ActionGroupChecks",
                 windowTitle: "Test",
@@ -86,7 +67,7 @@ private final class ActionGroupSurface: ScreenDriving {
 }
 
 private final class ActionGroupCodex: CodexServing {
-    enum Scenario { case repeatedObserve, verifyOnce, retryAfterFailure }
+    enum Scenario { case repeatedObserve, actionInvalidatesObservation }
 
     private let scenario: Scenario
     private(set) var results: [ScreenToolResult] = []
@@ -95,7 +76,6 @@ private final class ActionGroupCodex: CodexServing {
 
     func respond(
         to request: CodexRequest,
-        onTextDelta: @escaping @Sendable (String) -> Void,
         screenToolHandler: ScreenToolHandler?
     ) async throws -> String {
         guard let tool = screenToolHandler else {
@@ -109,34 +89,17 @@ private final class ActionGroupCodex: CodexServing {
         case .repeatedObserve:
             results.append(await tool(.observe))
             results.append(await tool(.observe))
-        case .verifyOnce:
-            results.append(await tool(.activateAndVerify(.init(
-                targetLocator: send,
-                expectedLocator: ElementLocator(
-                    role: .button,
-                    label: TextMatcher("Done")
-                )
-            ))))
-        case .retryAfterFailure:
-            let expected = ElementLocator(
-                role: .button,
-                label: TextMatcher("Done again")
-            )
-            results.append(await tool(.activateAndVerify(.init(
-                targetLocator: send,
-                expectedLocator: expected
-            ))))
-            results.append(await tool(.activateAndVerify(.init(
-                targetLocator: send,
-                expectedLocator: expected
-            ))))
+        case .actionInvalidatesObservation:
+            results.append(await tool(.observe))
+            results.append(await tool(.perform(.click(.locator(send)))))
+            results.append(await tool(.perform(.click(.locator(send)))))
+            results.append(await tool(.observe))
         }
         return "done"
     }
 
     func steer(_ instruction: String) async throws {}
-    func prepareForNextTurn() async {}
-    func resetSession() async {}
+    func prepare(resetHistory: Bool) async {}
     func cancel() {}
 }
 
@@ -168,22 +131,11 @@ func runActionGroupToolChecks() async {
         "every explicit observe must refresh the screen so manual edits are visible"
     )
 
-    let once = await runScenario(.verifyOnce)
+    let action = await runScenario(.actionInvalidatesObservation)
     check(
-        once.1.results.count == 1
-            && once.1.results[0].success
-            && once.0.activationCount == 1
-            && once.0.generation == 2,
-        "activate-and-verify must observe, activate exactly once, then observe again"
-    )
-
-    let retry = await runScenario(.retryAfterFailure)
-    check(
-        retry.1.results.count == 2
-            && !retry.1.results[0].success
-            && retry.1.results[1].success
-            && retry.0.activationCount == 2
-            && retry.0.generation == 4,
-        "a failed verification must report reality without installing a retry gate"
+        action.1.results.map(\.success) == [true, true, false, true]
+            && action.0.activationCount == 1
+            && action.0.generation == 2,
+        "compositions must use atomics and require a fresh observation after every action"
     )
 }

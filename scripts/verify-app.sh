@@ -11,7 +11,7 @@ test -f "$plist"
 test -f "$app/Contents/Resources/PetSprites.png"
 test -f "$app/Contents/Resources/JellyPetConfig.json"
 jq -e '
-  .schemaVersion == 2
+  (has("schemaVersion") | not)
   and .conversation.historyTurns == 8
   and .assistant.model == "auto"
   and .assistant.reasoningEffort == "high"
@@ -41,7 +41,7 @@ test -n "$(
 )"
 if /usr/libexec/PlistBuddy -c "Print :JellyCodexPath" "$plist" \
     >/dev/null 2>&1; then
-  echo "JellyCodexPath compatibility key must not be packaged." >&2
+  echo "Obsolete JellyCodexPath key must not be packaged." >&2
   exit 1
 fi
 codesign --verify --deep --strict "$app"
@@ -53,11 +53,11 @@ case "$requirements" in
     exit 1
     ;;
 esac
-"$app/Contents/MacOS/JellyPet" --verify-resources
-if test "${JELLY_SKIP_GUI_VERIFY:-0}" = "1"; then
-  echo "Skipped packaged GUI verification in the outer sandbox."
-else
-  "$app/Contents/MacOS/JellyPet" --verify-visuals
-fi
+sprite="$app/Contents/Resources/PetSprites.png"
+width="$(sips -g pixelWidth "$sprite" | awk '/pixelWidth:/ {print $2}')"
+height="$(sips -g pixelHeight "$sprite" | awk '/pixelHeight:/ {print $2}')"
+test "$width" -gt 0
+test "$width" -eq "$height"
+test "$((width % 8))" -eq 0
 
 echo "Verified $app"

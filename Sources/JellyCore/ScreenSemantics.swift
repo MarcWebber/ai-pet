@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ElementRole: String, Codable, CaseIterable, Equatable, Sendable {
+public enum ElementRole: String, Decodable, CaseIterable, Equatable, Sendable {
     case button, link, textField, checkBox, radioButton
     case menuItem, popUpButton, scrollArea
     /// Read-only structure roles. These make stable ancestor locators possible
@@ -48,22 +48,19 @@ public struct ScreenElement: Equatable, Sendable {
 
 public struct ScreenSemantics: Equatable, Sendable {
     public let applicationName, windowTitle: String
-    public let pageURL, readableText: String?
+    public let pageURL: String?
     public let elements: [ScreenElement]
     public init(
         applicationName: String,
         windowTitle: String,
         pageURL: String? = nil,
-        readableText: String? = nil,
         elements: [ScreenElement]
     ) {
         self.applicationName = applicationName
         self.windowTitle = windowTitle; self.pageURL = pageURL
-        self.readableText = readableText; self.elements = elements
+        self.elements = elements
     }
 }
-
-private enum TargetSource: String, Codable { case element, locator, visual }
 
 public enum ElementTarget: Equatable, Sendable {
     case element(elementID: String)
@@ -72,40 +69,20 @@ public enum ElementTarget: Equatable, Sendable {
     case visual(x: Int, y: Int)
 }
 
-extension ElementTarget: Codable {
-    private enum Key: String, CodingKey { case source, elementID, locator, x, y }
-
+extension ElementTarget: Decodable {
+    private enum Key: String, CodingKey { case elementID, locator, x, y }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: Key.self)
-        switch try values.decode(TargetSource.self, forKey: .source) {
-        case .visual:
+        if let id = try values.decodeIfPresent(String.self, forKey: .elementID) {
+            self = .element(elementID: id)
+        } else if let locator = try values.decodeIfPresent(ElementLocator.self, forKey: .locator) {
+            self = .locator(locator)
+        } else {
             self = .visual(
                 x: try values.decode(Int.self, forKey: .x),
                 y: try values.decode(Int.self, forKey: .y)
             )
-        case .element:
-            self = .element(
-                elementID: try values.decode(String.self, forKey: .elementID)
-            )
-        case .locator:
-            self = .locator(
-                try values.decode(ElementLocator.self, forKey: .locator)
-            )
         }
     }
 
-    public func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: Key.self)
-        switch self {
-        case let .visual(x, y):
-            try values.encode(TargetSource.visual, forKey: .source)
-            try values.encode(x, forKey: .x); try values.encode(y, forKey: .y)
-        case let .element(elementID):
-            try values.encode(TargetSource.element, forKey: .source)
-            try values.encode(elementID, forKey: .elementID)
-        case let .locator(locator):
-            try values.encode(TargetSource.locator, forKey: .source)
-            try values.encode(locator, forKey: .locator)
-        }
-    }
 }

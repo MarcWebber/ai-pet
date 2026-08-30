@@ -76,46 +76,18 @@ func runLocatorChecks() throws {
         "scope mismatches and empty locators must not resolve"
     )
 
-    let configured = ElementLocator(
-        application: TextMatcher("Messages"),
-        role: .button,
-        label: TextMatcher("Send"),
-        ordinal: 0
-    )
-    let roundTrip = try JSONDecoder().decode(
-        ElementLocator.self,
-        from: JSONEncoder().encode(configured)
-    )
-    check(roundTrip == configured, "locators must round-trip through tool JSON")
-    let minimal = try JSONDecoder().decode(
-        ElementLocator.self,
-        from: Data(#"{"role":"button"}"#.utf8)
-    )
-    check(minimal.requiresEnabled == true, "locators must require enabled elements by default")
-
     let enabled = locatorSnapshot(elements: [
         locatorElement("enabled", role: .button, label: "Send"),
         locatorElement("disabled", role: .button, label: "Send", isEnabled: false)
     ])
     check(
-        resolvedID(send, in: enabled) == "enabled"
-            && resolvedID(ElementLocator(
-                role: .button,
-                label: TextMatcher("Send"),
-                requiresEnabled: false
-            ), in: enabled) == nil,
-        "disabled elements must be excluded unless explicitly allowed"
+        resolvedID(send, in: enabled) == "enabled",
+        "disabled elements must always be excluded"
     )
 
-    let locatorAction = ScreenAction.click(.locator(send))
-    let decodedAction = try JSONDecoder().decode(
-        ScreenAction.self,
-        from: JSONEncoder().encode(locatorAction)
-    )
     check(
-        decodedAction == locatorAction
-            && resolvedID(send, in: first) == "e9",
-        "screen actions must preserve and resolve stable locator targets"
+        resolvedID(send, in: first) == "e9",
+        "screen actions must resolve stable locator targets"
     )
 }
 

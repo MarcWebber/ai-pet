@@ -58,21 +58,10 @@ extension PetFailure: LocalizedError {
     }
 }
 
-public struct AnswerHistoryEntry: Codable, Equatable, Identifiable, Sendable {
-    public let id: UUID
+public struct AnswerHistoryEntry: Codable, Equatable, Sendable {
     public let question: String?
     public let answer: String
-    public let createdAt: Date
-
-    public init(
-        id: UUID = UUID(),
-        question: String?,
-        answer: String,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.question = question
-        self.answer = answer
-        self.createdAt = createdAt
+    public init(question: String?, answer: String) {
+        self.question = question; self.answer = answer
     }
 }

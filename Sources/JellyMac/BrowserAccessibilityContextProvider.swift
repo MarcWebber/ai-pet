@@ -5,14 +5,6 @@ import Foundation
 import JellyCore
 
 public enum AccessibilityPolicy {
-    public enum NavigationEntry: Equatable { case addressBar, spotlight }
-
-    public static let supportedBundleIDs: Set<String> = [
-        "com.apple.Safari", "com.google.Chrome", "com.google.Chrome.beta",
-        "com.google.Chrome.canary", "com.microsoft.edgemac", "com.brave.Browser",
-        "company.thebrowser.Browser", "org.mozilla.firefox"
-    ]
-
     public static func role(_ axRole: String) -> ElementRole? {
         switch axRole {
         case kAXButtonRole: .button
@@ -35,7 +27,6 @@ public enum AccessibilityPolicy {
         default: nil
         }
     }
-
     public static func role(
         _ axRole: String,
         label: String,
@@ -46,7 +37,6 @@ public enum AccessibilityPolicy {
         }
         return role(axRole)
     }
-
     public static func isCodeEditorCandidate(
         role: String,
         label: String,
@@ -60,13 +50,6 @@ public enum AccessibilityPolicy {
         ]
         return codeEditorRoles.contains(role) && codeEditorLabels.contains(where: text.contains)
     }
-
-    public static func navigationEntry(frontmostBundleID: String?) -> NavigationEntry {
-        guard let frontmostBundleID, supportedBundleIDs.contains(frontmostBundleID)
-        else { return .spotlight }
-        return .addressBar
-    }
-
     public static func safeValue(
         role: ElementRole,
         subrole: String?,
@@ -80,7 +63,6 @@ public enum AccessibilityPolicy {
         }.joined()
         return String(clean.prefix(100_000))
     }
-
     public static func pageURL(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,19 +75,6 @@ public enum AccessibilityPolicy {
         parts.scheme = scheme; parts.user = nil; parts.password = nil; parts.fragment = nil
         return parts.string
     }
-
-    public static func readableText(_ fragments: [String]) -> String? {
-        var seen: Set<String> = [], lines: [String] = [], count = 0
-        for fragment in fragments.prefix(80) {
-            guard let value = compact(fragment), seen.insert(value).inserted else { continue }
-            let remaining = 4_000 - count - (lines.isEmpty ? 0 : 1)
-            guard remaining > 0 else { break }
-            let line = String(value.prefix(remaining))
-            lines.append(line); count += line.count + (lines.count > 1 ? 1 : 0)
-        }
-        return lines.isEmpty ? nil : lines.joined(separator: "\n")
-    }
-
     public static func normalizedFrame(_ frame: CGRect, displayBounds: CGRect) -> NormalizedRect? {
         guard displayBounds.width > 0, displayBounds.height > 0 else { return nil }
         let frame = frame.intersection(displayBounds)
@@ -122,7 +91,6 @@ public enum AccessibilityPolicy {
         )
         return result.isValid ? result : nil
     }
-
     static func compact(_ value: String?) -> String? {
         let words = value?.unicodeScalars.map {
             CharacterSet.controlCharacters.contains($0) ? " " : String($0)
@@ -137,24 +105,19 @@ final class BrowserAccessibilityContextProvider {
     private struct Node {
         let element: AXUIElement
         let visibleBounds: CGRect
-        let semanticParentID: Int?
+        let semanticParentID: String?
     }
     private struct Candidate {
-        let temporaryID: Int
-        let parentTemporaryID: Int?
         let semantic: ScreenElement
         let element: AXUIElement
     }
     private struct Traversal {
         var candidates: [Candidate] = []
         var pageURL: String?
-        var text: [String] = []
     }
     private var observationID = UUID().uuidString.lowercased()
     private var nativeElements: [String: AXUIElement] = [:]
-
     init() {}
-
     func snapshot(displayID: UInt32) async -> ScreenSemantics? {
         // AX references are intentionally valid for one observation only. Clear them even
         // when the next observation fails so an old element can never be acted upon later.
@@ -170,159 +133,57 @@ final class BrowserAccessibilityContextProvider {
         let visible = windowFrame.intersection(bounds)
         guard !visible.isNull else { return nil }
 
-        let traversal = await traverse(window, displayBounds: bounds, visibleBounds: visible)
-        let text = AccessibilityPolicy.readableText(traversal.text)
-        guard !traversal.candidates.isEmpty || traversal.pageURL != nil || text != nil
-        else { return nil }
+        let traversal = await traverse(
+            window, displayBounds: bounds, visibleBounds: visible,
+            observationID: currentObservationID
+        )
+        guard !traversal.candidates.isEmpty || traversal.pageURL != nil else { return nil }
 
-        var elements: [ScreenElement] = []
         let sorted = traversal.candidates.sorted {
             ($0.semantic.frame.y, $0.semantic.frame.x)
                 < ($1.semantic.frame.y, $1.semantic.frame.x)
         }.prefix(250)
-        var currentNativeElements: [String: AXUIElement] = [:]
-        let assignedIDs = Dictionary(uniqueKeysWithValues: sorted.enumerated().map {
-            ($0.element.temporaryID, "ax-\(currentObservationID)-e\($0.offset + 1)")
+        let elements = sorted.map(\.semantic)
+        let currentNativeElements = Dictionary(uniqueKeysWithValues: sorted.map {
+            ($0.semantic.id, $0.element)
         })
-        for candidate in sorted {
-            guard let elementID = assignedIDs[candidate.temporaryID] else { continue }
-            let semantic = ScreenElement(
-                id: elementID,
-                parentID: candidate.parentTemporaryID.flatMap { assignedIDs[$0] },
-                role: candidate.semantic.role,
-                label: candidate.semantic.label, value: candidate.semantic.value,
-                frame: candidate.semantic.frame, isEnabled: candidate.semantic.isEnabled
-            )
-            elements.append(semantic)
-            currentNativeElements[elementID] = candidate.element
-        }
         let snapshot = ScreenSemantics(
             applicationName: AccessibilityPolicy.compact(app.localizedName)
                 ?? app.bundleIdentifier ?? "",
             windowTitle: AccessibilityPolicy.compact(window.axString(kAXTitleAttribute)) ?? "",
             pageURL: traversal.pageURL,
-            readableText: text,
             elements: elements
         )
         guard currentObservationID == observationID else { return nil }
         nativeElements = currentNativeElements
         return snapshot
     }
-
     func nativeElement(for id: String) -> AXUIElement? {
         guard id.hasPrefix("ax-\(observationID)-") else { return nil }
         return nativeElements[id]
     }
-
-    private func frontWindow(_ app: AXUIElement, intersecting bounds: CGRect?) -> AXUIElement? {
-        if let focused = app.axElement(kAXFocusedWindowAttribute), validWindow(focused, bounds) {
-            return focused
-        }
-        return app.axElements(kAXWindowsAttribute).first { validWindow($0, bounds) }
-    }
-
     private func displayWindow(
         intersecting bounds: CGRect
     ) -> (NSRunningApplication, AXUIElement)? {
-        let options: CGWindowListOption = [
-            .optionOnScreenOnly, .excludeDesktopElements
-        ]
-        let ownPID = pid_t(ProcessInfo.processInfo.processIdentifier)
-        let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
-            as? [[String: Any]] ?? []
-        var visited: Set<pid_t> = []
-        for info in windows {
-            guard (info[kCGWindowLayer as String] as? Int) == 0,
-                  let owner = info[kCGWindowOwnerPID as String] as? Int,
-                  pid_t(owner) != ownPID,
-                  visited.insert(pid_t(owner)).inserted,
-                  let running = NSRunningApplication(
-                      processIdentifier: pid_t(owner)
-                  ),
-                  running.activationPolicy == .regular,
-                  let frame = windows.compactMap({ candidate -> CGRect? in
-                      guard (candidate[kCGWindowLayer as String] as? Int) == 0,
-                            (candidate[kCGWindowOwnerPID as String] as? Int)
-                                == owner,
-                            let frame = windowFrame(candidate),
-                            frame.intersects(bounds) else {
-                          return nil
-                      }
-                      return frame
-                  }).max(by: {
-                      visibleArea($0, in: bounds) < visibleArea($1, in: bounds)
-                  }),
-                  let window = matchingWindow(
-                      AXUIElementCreateApplication(pid_t(owner)),
-                      frame: frame,
-                      intersecting: bounds
-                  ) else {
-                continue
-            }
-            return (running, window)
-        }
         guard let running = NSWorkspace.shared.frontmostApplication,
-              let window = frontWindow(
-                  AXUIElementCreateApplication(running.processIdentifier),
-                  intersecting: bounds
-              ) else {
+              running.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
             return nil
         }
-        return (running, window)
-    }
-
-    private func windowFrame(_ info: [String: Any]) -> CGRect? {
-        guard let raw = info[kCGWindowBounds as String] as? [String: Any],
-              let x = raw["X"] as? NSNumber,
-              let y = raw["Y"] as? NSNumber,
-              let width = raw["Width"] as? NSNumber,
-              let height = raw["Height"] as? NSNumber else {
-            return nil
+        let app = AXUIElementCreateApplication(running.processIdentifier)
+        let windows = ([app.axElement(kAXFocusedWindowAttribute)]
+            + app.axElements(kAXWindowsAttribute).map(Optional.some))
+            .compactMap { $0 }
+        let window = windows.first {
+            $0.axBool(kAXMinimizedAttribute) != true
+                && $0.axFrame?.intersects(bounds) == true
         }
-        return CGRect(
-            x: x.doubleValue,
-            y: y.doubleValue,
-            width: width.doubleValue,
-            height: height.doubleValue
-        )
+        return window.map { (running, $0) }
     }
-
-    private func visibleArea(_ frame: CGRect, in bounds: CGRect) -> CGFloat {
-        let intersection = frame.intersection(bounds)
-        return intersection.isNull ? 0 : intersection.width * intersection.height
-    }
-
-    private func matchingWindow(
-        _ app: AXUIElement,
-        frame: CGRect,
-        intersecting bounds: CGRect
-    ) -> AXUIElement? {
-        let windows = app.axElements(kAXWindowsAttribute).filter {
-            validWindow($0, bounds)
-        }
-        return windows.min {
-            windowDistance($0.axFrame, frame) < windowDistance($1.axFrame, frame)
-        }
-    }
-
-    private func windowDistance(_ candidate: CGRect?, _ expected: CGRect) -> CGFloat {
-        guard let candidate else { return .greatestFiniteMagnitude }
-        return abs(candidate.minX - expected.minX)
-            + abs(candidate.minY - expected.minY)
-            + abs(candidate.width - expected.width)
-            + abs(candidate.height - expected.height)
-    }
-
-    private func validWindow(_ window: AXUIElement, _ bounds: CGRect?) -> Bool {
-        guard window.axBool(kAXMinimizedAttribute) != true, let frame = window.axFrame
-        else { return false }
-        return bounds.map(frame.intersects) ?? true
-    }
-
     private func traverse(
         _ window: AXUIElement,
         displayBounds: CGRect,
-        visibleBounds: CGRect
+        visibleBounds: CGRect,
+        observationID: String
     ) async -> Traversal {
         var result = Traversal(), stack = [Node(
             element: window,
@@ -346,24 +207,17 @@ final class BrowserAccessibilityContextProvider {
                    element,
                    displayBounds,
                    node.visibleBounds,
-                   temporaryID: result.candidates.count,
-                   parentTemporaryID: node.semanticParentID
+                   id: "ax-\(observationID)-e\(result.candidates.count + 1)",
+                   parentID: node.semanticParentID
                ) {
                 result.candidates.append(candidate)
-                descendantParentID = candidate.temporaryID
+                descendantParentID = candidate.semantic.id
             }
             if let role = element.axString(kAXRoleAttribute) {
                 if role == "AXWebArea", result.pageURL == nil {
                     result.pageURL = AccessibilityPolicy.pageURL(
                         element.axURL(kAXURLAttribute) ?? element.axURL(kAXDocumentAttribute)
                     )
-                }
-                if result.text.count < 80,
-                   ["AXHeading", "AXStaticText"].contains(role),
-                   element.axFrame?.intersects(node.visibleBounds) == true,
-                   let value = [kAXValueAttribute, kAXTitleAttribute, kAXDescriptionAttribute]
-                    .compactMap({ AccessibilityPolicy.compact(element.axString($0)) }).first {
-                    result.text.append(value)
                 }
             }
             stack += element.axElements(kAXChildrenAttribute).reversed().map {
@@ -376,13 +230,12 @@ final class BrowserAccessibilityContextProvider {
         }
         return result
     }
-
     private func candidate(
         _ element: AXUIElement,
         _ displayBounds: CGRect,
         _ visibleBounds: CGRect,
-        temporaryID: Int,
-        parentTemporaryID: Int?
+        id: String,
+        parentID: String?
     ) -> Candidate? {
         guard let role = semanticRole(element),
               let frame = element.axFrame,
@@ -399,17 +252,14 @@ final class BrowserAccessibilityContextProvider {
             : element.axLabel
         guard shouldExpose(role: role, label: label, value: value) else { return nil }
         return Candidate(
-            temporaryID: temporaryID,
-            parentTemporaryID: parentTemporaryID,
             semantic: ScreenElement(
-                id: "", role: role, label: label, value: value,
+                id: id, parentID: parentID, role: role, label: label, value: value,
                 frame: normalized,
                 isEnabled: element.axBool(kAXEnabledAttribute) != false
             ),
             element: element
         )
     }
-
     private func semanticRole(_ element: AXUIElement) -> ElementRole? {
         guard let role = element.axString(kAXRoleAttribute) else { return nil }
         if ["AXDialog", "AXSheet"].contains(element.axString(kAXSubroleAttribute)) {
@@ -420,7 +270,6 @@ final class BrowserAccessibilityContextProvider {
             identifier: element.axString("AXIdentifier")
         )
     }
-
     private func shouldExpose(
         role: ElementRole,
         label: String,
@@ -435,7 +284,6 @@ final class BrowserAccessibilityContextProvider {
             return true
         }
     }
-
     private func clips(_ element: AXUIElement) -> Bool {
         ["AXWebArea", kAXScrollAreaRole].contains(element.axString(kAXRoleAttribute))
     }

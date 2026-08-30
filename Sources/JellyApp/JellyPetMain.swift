@@ -1,5 +1,4 @@
 import AppKit
-import CoreGraphics
 import Darwin
 import JellyCore
 import JellyMac
@@ -7,57 +6,8 @@ import JellyMac
 @main
 private enum JellyPetMain {
     private static var instanceLock: Int32 = -1
-
     @MainActor
     static func main() {
-        if CommandLine.arguments.contains("--print-main-display-id") {
-            print(CGMainDisplayID())
-            exit(EXIT_SUCCESS)
-        }
-
-        if CommandLine.arguments.contains("--verify-resources") {
-            let message = JellyView.verifyBehaviorConfiguration()
-            print(message)
-            exit(message.hasSuffix("passed.") ? EXIT_SUCCESS : EXIT_FAILURE)
-        }
-
-        if CommandLine.arguments.contains("--verify-visuals") {
-            let result = VisualVerifier.verifyPetTransparency()
-            print(result.message)
-            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
-        }
-
-        if CommandLine.arguments.contains("--verify-settings-layout") {
-            _ = NSApplication.shared
-            let result = VisualVerifier.verifySettingsLayout()
-            print(result.message)
-            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
-        }
-
-        if CommandLine.arguments.contains("--verify-main-bubble-layout") {
-            _ = NSApplication.shared
-            let result = VisualVerifier.verifyMainBubbleLayout()
-            print(result.message)
-            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
-        }
-
-        if let index = CommandLine.arguments.firstIndex(
-            of: "--render-settings-preview"
-        ), CommandLine.arguments.indices.contains(index + 1) {
-            _ = NSApplication.shared
-            let result = VisualVerifier.renderSettingsPreview(
-                to: URL(fileURLWithPath: CommandLine.arguments[index + 1])
-            )
-            print(result.message)
-            exit(result.passed ? EXIT_SUCCESS : EXIT_FAILURE)
-        }
-
-        if CommandLine.arguments.contains("--sweep-temporary-artifacts") {
-            TemporaryArtifactSweeper().removeAll()
-            print("Temporary JellyPet artifacts removed.")
-            exit(EXIT_SUCCESS)
-        }
-
         guard acquireInstanceLock() else {
             NSRunningApplication.runningApplications(
                 withBundleIdentifier: AppMetadata.bundleIdentifier
@@ -71,7 +21,6 @@ private enum JellyPetMain {
         application.setActivationPolicy(.accessory)
         application.run()
     }
-
     private static func acquireInstanceLock() -> Bool {
         let path = (NSTemporaryDirectory() as NSString)
             .appendingPathComponent("JellyPet-single-instance.lock")

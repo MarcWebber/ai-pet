@@ -5,10 +5,8 @@ import JellyCore
 final class StatusItemController: NSObject {
     enum Action: String { case primary, pet, mute, settings, quit }
     var onAction: ((Action) -> Void)?
-
     private let status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var items: [Action: NSMenuItem] = [:]
-
     override init() {
         super.init()
         status.button?.image = NSImage(
@@ -30,7 +28,6 @@ final class StatusItemController: NSObject {
             shortcutLabel: AppMetadata.shortcutLabel
         )
     }
-
     func update(
         isPetVisible: Bool,
         isMuted: Bool,
@@ -49,9 +46,7 @@ final class StatusItemController: NSObject {
             ? "\(takeoverStatus ?? "接管中") · \(shortcutLabel) 停止"
             : "果冻 · \(shortcutLabel)"
     }
-
     func showMenu() { status.button?.performClick(nil) }
-
     private func add(_ action: Action, _ title: String, key: String = "", to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: #selector(handleAction), keyEquivalent: key)
         item.target = self
@@ -59,7 +54,6 @@ final class StatusItemController: NSObject {
         items[action] = item
         menu.addItem(item)
     }
-
     @objc private func handleAction(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let action = Action(rawValue: raw)
         else { return }
